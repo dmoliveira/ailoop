@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ailoop — Repeatable AI terminal loops</title>
+    <meta
+      name="description"
+      content="Repeatable AI terminal loops with YAML config, durable state, task-file mode, pause/resume controls, and JSON-friendly output."
+    />
+    <style>
+      :root {
+        --bg: #08111f;
+        --panel: #0b1220;
+        --panel-2: #101827;
+        --line: #243244;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --blue: #38bdf8;
+        --violet: #8b5cf6;
+        --teal: #14b8a6;
+        --green: #22c55e;
+        --yellow: #facc15;
+        --radius: 20px;
+        --shadow: 0 20px 60px rgba(2, 6, 23, 0.45);
+      }
+
+      * { box-sizing: border-box; }
+      html { scroll-behavior: smooth; }
+      body {
+        margin: 0;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: radial-gradient(circle at top right, rgba(56,189,248,0.10), transparent 22%),
+                    radial-gradient(circle at left center, rgba(139,92,246,0.10), transparent 28%),
+                    var(--bg);
+        color: var(--text);
+      }
+
+      a { color: var(--blue); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+
+      .wrap {
+        width: min(1120px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        backdrop-filter: blur(10px);
+        background: rgba(8, 17, 31, 0.82);
+        border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+      }
+
+      .topbar-inner {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        min-height: 64px;
+      }
+
+      .brand {
+        font-size: 1.05rem;
+        font-weight: 800;
+        color: var(--text);
+      }
+
+      .nav {
+        display: flex;
+        gap: 16px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      .nav a {
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .hero {
+        padding: 48px 0 28px;
+      }
+
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1.15fr 0.85fr;
+        gap: 28px;
+        align-items: center;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.72);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+
+      h1 {
+        margin: 18px 0 12px;
+        font-size: clamp(2.7rem, 5vw, 4.4rem);
+        line-height: 1.03;
+        letter-spacing: -0.04em;
+      }
+
+      .lead {
+        margin: 0 0 20px;
+        color: var(--muted);
+        font-size: 1.12rem;
+        line-height: 1.7;
+        max-width: 60ch;
+      }
+
+      .cta-row {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin: 20px 0 22px;
+      }
+
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        min-height: 44px;
+        padding: 0 16px;
+        border-radius: 12px;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .btn-primary {
+        color: white;
+        background: linear-gradient(135deg, var(--blue), var(--violet));
+        box-shadow: var(--shadow);
+      }
+
+      .btn-secondary {
+        color: var(--text);
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+      }
+
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .chip {
+        padding: 8px 12px;
+        border-radius: 999px;
+        color: #dbeafe;
+        font-size: 0.92rem;
+        background: rgba(15, 23, 42, 0.78);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+      }
+
+      .card,
+      .terminal,
+      .feature,
+      .docs-grid a,
+      .use-case {
+        background: linear-gradient(180deg, rgba(15, 23, 42, 0.92), rgba(11, 18, 32, 0.96));
+        border: 1px solid rgba(148, 163, 184, 0.12);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+      }
+
+      .terminal {
+        overflow: hidden;
+      }
+
+      .terminal-bar {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 16px;
+        border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .dot { width: 10px; height: 10px; border-radius: 50%; }
+      .dot.red { background: #ef4444; }
+      .dot.yellow { background: #f59e0b; }
+      .dot.green { background: #10b981; }
+
+      pre {
+        margin: 0;
+        padding: 20px;
+        overflow: auto;
+        color: #e2e8f0;
+        font-size: 0.95rem;
+        line-height: 1.65;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      }
+
+      .section {
+        padding: 26px 0;
+      }
+
+      .section h2 {
+        margin: 0 0 10px;
+        font-size: clamp(1.55rem, 2vw, 2.2rem);
+      }
+
+      .section p.section-lead {
+        margin: 0 0 18px;
+        color: var(--muted);
+        max-width: 70ch;
+        line-height: 1.7;
+      }
+
+      .quick-grid,
+      .feature-grid,
+      .use-case-grid,
+      .docs-grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .feature-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .use-case-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .docs-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
+      .card { padding: 18px; }
+      .card h3,
+      .feature h3,
+      .use-case h3 {
+        margin: 0 0 8px;
+        font-size: 1.05rem;
+      }
+
+      .feature,
+      .use-case,
+      .docs-grid a { padding: 18px; }
+      .feature p,
+      .use-case p,
+      .docs-grid a span,
+      .card p { margin: 0; color: var(--muted); line-height: 1.6; }
+
+      .docs-grid a { display: block; color: var(--text); }
+      .docs-grid a strong { display: block; margin-bottom: 6px; }
+
+      .footer {
+        padding: 40px 0 70px;
+        color: var(--muted);
+      }
+
+      .footer-card {
+        padding: 20px;
+        border-radius: var(--radius);
+        background: rgba(15, 23, 42, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.12);
+      }
+
+      .kicker {
+        color: var(--blue);
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        font-size: 0.78rem;
+      }
+
+      @media (max-width: 980px) {
+        .hero-grid,
+        .quick-grid,
+        .feature-grid,
+        .use-case-grid,
+        .docs-grid {
+          grid-template-columns: 1fr;
+        }
+
+        .topbar-inner {
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 12px 0;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="wrap topbar-inner">
+        <a class="brand" href="#top">ailoop 🔁</a>
+        <nav class="nav" aria-label="Primary">
+          <a href="#quick-start">Quick start</a>
+          <a href="#task-file-mode">Task file</a>
+          <a href="#docs">Docs</a>
+          <a href="https://github.com/dmoliveira/ailoop">GitHub</a>
+          <a href="https://pypi.org/project/ailoop/">PyPI</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="wrap hero-grid">
+          <div>
+            <div class="eyebrow">CLI · YAML · task files · durable state</div>
+            <h1>Run AI terminal tools in repeatable loops</h1>
+            <p class="lead">
+              `ailoop` gives you a clean way to run OpenCode, Codex, Claude, and similar AI terminal tools in safe repeatable loops with pause/resume, task-file mode, logs, stats, and JSON output.
+            </p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="#quick-start">⚡ Quick start</a>
+              <a class="btn btn-secondary" href="#task-file-mode">✅ Task file mode</a>
+              <a class="btn btn-secondary" href="https://github.com/dmoliveira/ailoop">GitHub</a>
+            </div>
+            <div class="chip-row" aria-label="Key features">
+              <span class="chip">YAML config</span>
+              <span class="chip">pause/resume</span>
+              <span class="chip">task files</span>
+              <span class="chip">durable state</span>
+              <span class="chip">OpenCode / Codex / Claude</span>
+            </div>
+          </div>
+
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span class="dot red"></span>
+              <span class="dot yellow"></span>
+              <span class="dot green"></span>
+            </div>
+            <pre>$ ailoop ps
+
+ID             State         Prog   Updated              Summary
+-------------  ------------  -----  -------------------  -------
+demo-loop      ▶ running       3/∞  2026-05-16 08:00:11  review repo
+
+$ ailoop pause demo-loop
+⏸  demo-loop · pause_requested</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="why-ailoop">
+        <div class="wrap">
+          <div class="kicker">Why ailoop</div>
+          <h2>Better than a brittle <code>while true</code> shell loop</h2>
+          <p class="section-lead">
+            Most AI terminal workflows begin as a fast shell loop and then grow messy. `ailoop` keeps the good part — fast repetition — while adding controls, structure, state, and automation-friendly output.
+          </p>
+          <div class="feature-grid">
+            <div class="feature"><h3>🔁 Repeatable runs</h3><p>Run forever or for a fixed number of steps with one command.</p></div>
+            <div class="feature"><h3>⚙️ YAML config</h3><p>Keep defaults in one config file and override them per run.</p></div>
+            <div class="feature"><h3>💾 Durable state</h3><p>Track loops on disk so pause, resume, status, and stats stay consistent.</p></div>
+            <div class="feature"><h3>⏸ Control flow</h3><p>Pause or stop active loops without killing the whole tool session.</p></div>
+            <div class="feature"><h3>✅ Task file mode</h3><p>Use a strict Markdown task file when the loop should stop only after the list is done.</p></div>
+            <div class="feature"><h3>🧾 JSON output</h3><p>Use machine-friendly status, stats, logs, and task-file checks in scripts.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="quick-start">
+        <div class="wrap">
+          <div class="kicker">Quick start</div>
+          <h2>Get to the first successful run fast</h2>
+          <p class="section-lead">Two small steps are enough for the first run: install locally, then start a loop.</p>
+          <div class="quick-grid">
+            <div class="card">
+              <h3>1. Install</h3>
+              <pre>uv sync</pre>
+            </div>
+            <div class="card">
+              <h3>2. Run</h3>
+              <pre>ailoop init-config
+ailoop run "Review the repo and keep iterating." \
+  --runner opencode \
+  --agent orchestrator</pre>
+            </div>
+          </div>
+          <div class="card" style="margin-top: 16px;">
+            <h3>Watch / control / inspect</h3>
+            <pre>ailoop ps
+ailoop tail &lt;loop-id&gt;
+ailoop pause &lt;loop-id&gt;
+ailoop resume &lt;loop-id&gt;
+ailoop status &lt;loop-id&gt;</pre>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="task-file-mode">
+        <div class="wrap">
+          <div class="kicker">Task file mode</div>
+          <h2>Use a strict Markdown task file when the loop should stop on task completion</h2>
+          <p class="section-lead">
+            Task file mode is a strong fit for structured AI work. The loop continues while <code>To do</code> or <code>Doing</code> still has real tasks.
+          </p>
+          <div class="quick-grid">
+            <div class="card">
+              <h3>Valid file</h3>
+              <pre># Loop Tasks
+
+## To do
+- [ ] First task
+
+## Doing
+- None
+
+## Done
+- None</pre>
+            </div>
+            <div class="card">
+              <h3>Use it</h3>
+              <pre>ailoop init-task-file ./loop_tasks.md
+ailoop check-task-file ./loop_tasks.md
+ailoop run "Work the task list." \
+  --task-file ./loop_tasks.md \
+  --until-tasks-complete</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="use-cases">
+        <div class="wrap">
+          <div class="kicker">Real workflows</div>
+          <h2>Fits the common loop shapes</h2>
+          <div class="use-case-grid">
+            <div class="use-case"><h3>Repo review</h3><p>Keep iterating on one repo review or maintenance prompt until you stop it.</p></div>
+            <div class="use-case"><h3>Bounded runs</h3><p>Use fixed steps when you want exactly 3, 5, or 10 iterations and a clean stop.</p></div>
+            <div class="use-case"><h3>Task lists</h3><p>Run against a strict Markdown task file and stop when the list is complete.</p></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="docs">
+        <div class="wrap">
+          <div class="kicker">Docs</div>
+          <h2>Use the site as a front door to the repo docs</h2>
+          <div class="docs-grid">
+            <a href="https://github.com/dmoliveira/ailoop#readme"><strong>README</strong><span>Main project overview and quick start.</span></a>
+            <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/task-file.md"><strong>Task file</strong><span>Strict Markdown format, rules, and stop behavior.</span></a>
+            <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/config.md"><strong>Config</strong><span>Defaults, paths, and config layering.</span></a>
+            <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/examples.md"><strong>Examples</strong><span>Copy-paste command examples.</span></a>
+            <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/support.md"><strong>Support</strong><span>Support and donation link.</span></a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="wrap footer-card">
+        <strong>ailoop</strong>
+        <p style="margin: 10px 0 14px; line-height: 1.7;">
+          A small CLI for repeatable AI terminal loops with YAML config, durable state, task-file mode, pause/resume, and stats.
+        </p>
+        <p style="margin: 0; display: flex; flex-wrap: wrap; gap: 16px;">
+          <a href="https://github.com/dmoliveira/ailoop">GitHub</a>
+          <a href="https://pypi.org/project/ailoop/">PyPI</a>
+          <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/support.md">Support</a>
+          <a href="https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00">Stripe</a>
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>
