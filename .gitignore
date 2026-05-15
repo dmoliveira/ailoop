@@ -1,0 +1,9 @@
+.venv/
+.venv-publish/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+dist/
+build/
+.tmp-*
