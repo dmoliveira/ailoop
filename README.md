@@ -18,7 +18,7 @@
 >
 > YAML config, durable state, task-file mode, pause/resume, and stats for OpenCode, Codex, Claude, and more.
 >
-> Docs hub: [docs/index.md](docs/index.md)
+> Docs: [GitHub Pages](https://dmoliveira.github.io/ailoop/) · [docs/index.md](docs/index.md)
 >
 > Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 
