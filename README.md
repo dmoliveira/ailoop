@@ -9,6 +9,7 @@
 [![AI Loop Runner](https://img.shields.io/badge/focus-AI%20loop%20runner-8a2be2)](#why-ailoop-)
 [![Task File Mode](https://img.shields.io/badge/task%20file-strict%20markdown-0a7ea4)](#task-file-mode-)
 [![Docs](https://img.shields.io/badge/docs-in_repo-1f6feb)](docs/index.md)
+[![Site](https://img.shields.io/badge/site-github_pages-2ea44f)](https://dmoliveira.github.io/ailoop/)
 [![Support](https://img.shields.io/badge/support-Stripe-635bff)](docs/support.md)
 
 ![ailoop hero](docs/branding/hero-banner.svg)
@@ -230,6 +231,7 @@ Prompt and run logs are stored under the loop log directory for inspection.
 ## Docs 📚
 
 - [docs hub](docs/index.md)
+- [GitHub Pages site](https://dmoliveira.github.io/ailoop/)
 - [config guide](docs/config.md)
 - [task-file mode](docs/task-file.md)
 - [examples](docs/examples.md)

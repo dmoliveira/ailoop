@@ -1,5 +1,6 @@
 # ailoop docs 📚
 
+- [site landing page](site/index.html) — GitHub Pages landing page source
 - [config.md](config.md) — config paths, defaults, and overrides
 - [task-file.md](task-file.md) — strict Markdown task mode
 - [runners.md](runners.md) — runner model and command templates
