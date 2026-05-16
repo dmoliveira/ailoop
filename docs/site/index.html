@@ -79,6 +79,23 @@
         font-size: 0.95rem;
       }
 
+      .author-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-size: 0.96rem;
+      }
+
+      .support-card {
+        margin-top: 18px;
+        padding: 18px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(148, 163, 184, 0.14);
+      }
+
       .hero {
         padding: 48px 0 28px;
       }
@@ -295,6 +312,7 @@
           <a href="#quick-start">Quick start</a>
           <a href="#task-file-mode">Task file</a>
           <a href="#docs">Docs</a>
+          <a href="https://github.com/dmoliveira">Author</a>
           <a href="https://github.com/dmoliveira/ailoop">GitHub</a>
           <a href="https://pypi.org/project/ailoop/">PyPI</a>
         </nav>
@@ -314,6 +332,11 @@
               <a class="btn btn-primary" href="#quick-start">⚡ Get started</a>
               <a class="btn btn-secondary" href="#docs">📚 Docs</a>
               <a class="btn btn-secondary" href="https://pypi.org/project/ailoop/">PyPI</a>
+            </div>
+            <div class="author-row">
+              <span>By <strong>Diego Oliveira</strong></span>
+              <a href="https://github.com/dmoliveira">GitHub</a>
+              <a href="https://www.linkedin.com/in/dmoliveira/">LinkedIn</a>
             </div>
             <div class="chip-row" aria-label="Key features">
               <span class="chip">YAML config</span>
@@ -454,12 +477,23 @@ ailoop run "Work the task list." \
         <p style="margin: 10px 0 14px; line-height: 1.7;">
           A small CLI for repeatable AI terminal loops with YAML config, durable state, task-file mode, pause/resume, and stats.
         </p>
-        <p style="margin: 0 0 14px; color: var(--muted);">If ailoop saves you time, you can support ongoing maintenance here.</p>
+        <div class="support-card">
+          <strong>Support ailoop 💛</strong>
+          <p style="margin: 10px 0 14px; color: var(--muted); line-height: 1.7;">
+            If ailoop saves you time, you can support ongoing maintenance and future releases here.
+          </p>
+          <p style="margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 16px;">
+            <a href="https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00">Stripe</a>
+            <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/support.md">Support notes</a>
+          </p>
+        </div>
+        <p style="margin: 18px 0 14px; color: var(--muted);">By Diego Oliveira</p>
         <p style="margin: 0; display: flex; flex-wrap: wrap; gap: 16px;">
+          <a href="https://github.com/dmoliveira">GitHub</a>
+          <a href="https://www.linkedin.com/in/dmoliveira/">LinkedIn</a>
           <a href="https://github.com/dmoliveira/ailoop">GitHub</a>
           <a href="https://pypi.org/project/ailoop/">PyPI</a>
           <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/support.md">Support</a>
-          <a href="https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00">Stripe</a>
         </p>
       </div>
     </footer>
