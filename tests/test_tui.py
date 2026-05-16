@@ -117,17 +117,25 @@ def test_tui_remove_uses_force_for_paused_loop(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     service.create_loop(run_config, loop_id="paused-loop")
-    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
-    app.service = service
-    app.selected_loop_id = "paused-loop"
     seen = {}
 
-    def fake_remove(loop_id, force=False):  # type: ignore[no-untyped-def]
-        seen["loop_id"] = loop_id
-        seen["force"] = force
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        app.selected_loop_id = "paused-loop"
 
-    app.service.remove_loop = fake_remove  # type: ignore[method-assign]
-    app.refresh_data = lambda: None  # type: ignore[assignment]
-    app.notify = lambda *args, **kwargs: None  # type: ignore[assignment]
-    app.action_remove_selected()
+        def fake_remove(loop_id, force=False):  # type: ignore[no-untyped-def]
+            seen["loop_id"] = loop_id
+            seen["force"] = force
+
+        app.service.remove_loop = fake_remove  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.action_remove_selected()
+            await pilot.pause()
+            app.action_remove_selected()
+            await pilot.pause()
+
+    import asyncio
+
+    asyncio.run(run_test())
     assert seen == {"loop_id": "paused-loop", "force": True}
