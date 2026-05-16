@@ -11,6 +11,7 @@
 [![Docs](https://img.shields.io/badge/docs-in_repo-1f6feb)](docs/index.md)
 [![Site](https://img.shields.io/badge/site-github_pages-2ea44f)](https://dmoliveira.github.io/ailoop/)
 [![Support](https://img.shields.io/badge/support-Stripe-635bff)](docs/support.md)
+[![Author](https://img.shields.io/badge/author-@dmoliveira-24292f)](https://github.com/dmoliveira)
 
 ![ailoop hero](docs/branding/hero-banner.svg)
 
@@ -19,6 +20,8 @@
 > YAML config, durable state, task-file mode, pause/resume, and stats for OpenCode, Codex, Claude, and more.
 >
 > Docs: [GitHub Pages](https://dmoliveira.github.io/ailoop/) · [docs/index.md](docs/index.md)
+>
+> Author: [@dmoliveira](https://github.com/dmoliveira) · [LinkedIn](https://www.linkedin.com/in/dmoliveira/)
 >
 > Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 
@@ -243,6 +246,11 @@ Prompt and run logs are stored under the loop log directory for inspection.
 If `ailoop` saves you time, you can support ongoing maintenance and future releases here:
 
 - Stripe: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
+
+Author:
+
+- GitHub: [@dmoliveira](https://github.com/dmoliveira)
+- LinkedIn: [Diego Marinho de Oliveira](https://www.linkedin.com/in/dmoliveira/)
 
 More: [docs/support.md](docs/support.md)
 
