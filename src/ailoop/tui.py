@@ -161,6 +161,7 @@ class LoopDashboard(App[None]):
     selected_loop_id: reactive[str | None] = reactive(None)
     filter_mode: reactive[FilterMode] = reactive("running")
     log_kind: reactive[LogKind] = reactive("stdout")
+    delete_armed: reactive[bool] = reactive(False)
 
     def __init__(self, config_path: Path, loop_id: str | None = None) -> None:
         super().__init__()
@@ -199,13 +200,7 @@ class LoopDashboard(App[None]):
             with Vertical(id="details"):
                 yield Static("ℹ details", classes="panel-title")
                 yield Static(id="detail_view")
-        yield Static(
-            (
-                "nav ↑↓/click · filters g/a/l · actions p pause · u resume · "
-                "s stop · d delete · logs 1/2/3/4 · r refresh · q quit"
-            ),
-            id="help_bar",
-        )
+        yield Static("loading...", id="help_bar")
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
@@ -214,6 +209,12 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def _sync_button_state(self) -> None:
+        state = self._selected_state()
+        status = state.status if state is not None else None
+        can_pause = status in {"running", "pause_requested"}
+        can_resume = status in {"paused", "stopped", "failed", "idle"}
+        can_stop = status in {"running", "pause_requested", "paused"}
+        can_remove = status not in {None, "running", "pause_requested", "stop_requested"}
         for button_id, active in {
             "filter-running": self.filter_mode == "running",
             "filter-active": self.filter_mode == "active",
@@ -224,6 +225,33 @@ class LoopDashboard(App[None]):
             "log-events": self.log_kind == "events",
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
+        self.query_one("#pause", Button).disabled = not can_pause
+        self.query_one("#resume", Button).disabled = not can_resume
+        self.query_one("#stop", Button).disabled = not can_stop
+        self.query_one("#remove", Button).disabled = not can_remove
+        self.query_one("#remove", Button).label = "✖ Confirm" if self.delete_armed else "✖ Delete"
+        self._render_help_bar(state)
+
+    def _render_help_bar(self, state: object | None) -> None:
+        bar = self.query_one("#help_bar", Static)
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4 · r refresh · q quit"
+        if state is None:
+            bar.update(base + " · no loop selected")
+            return
+        loop_state = state.status  # type: ignore[attr-defined]
+        actions: list[str] = []
+        if loop_state in {"running", "pause_requested"}:
+            actions.append("p pause")
+        if loop_state in {"paused", "stopped", "failed", "idle"}:
+            actions.append("u resume")
+        if loop_state in {"running", "pause_requested", "paused"}:
+            actions.append("s stop")
+        if loop_state not in {"running", "pause_requested", "stop_requested"}:
+            actions.append("d delete")
+        if self.delete_armed:
+            actions.append("d confirm delete")
+        action_text = " · ".join(actions) if actions else "read only"
+        bar.update(f"{base} · actions {action_text}")
 
     def _filtered_loops(self):
         states = self.service.list_loops()
@@ -404,14 +432,17 @@ class LoopDashboard(App[None]):
 
     def action_filter_running(self) -> None:
         self.filter_mode = "running"
+        self.delete_armed = False
         self.refresh_data()
 
     def action_filter_active(self) -> None:
         self.filter_mode = "active"
+        self.delete_armed = False
         self.refresh_data()
 
     def action_filter_all(self) -> None:
         self.filter_mode = "all"
+        self.delete_armed = False
         self.refresh_data()
 
     def action_set_log_stdout(self) -> None:
@@ -436,27 +467,37 @@ class LoopDashboard(App[None]):
 
     def action_pause_selected(self) -> None:
         if self.selected_loop_id:
+            self.delete_armed = False
             self.service.request_control(self.selected_loop_id, "pause")
             self.refresh_data()
 
     def action_resume_selected(self) -> None:
         if self.selected_loop_id:
+            self.delete_armed = False
             self._spawn_resume(self.selected_loop_id)
             self.notify(f"resume sent: {self.selected_loop_id}")
+            self.refresh_data()
 
     def action_stop_selected(self) -> None:
         if self.selected_loop_id:
+            self.delete_armed = False
             self.service.request_control(self.selected_loop_id, "stop")
             self.refresh_data()
 
     def action_remove_selected(self) -> None:
         if self.selected_loop_id:
+            if not self.delete_armed:
+                self.delete_armed = True
+                self.notify(f"press d again to delete: {self.selected_loop_id}")
+                self._sync_button_state()
+                return
             try:
                 self.service.remove_loop(self.selected_loop_id, force=True)
             except Exception as exc:
                 self.notify(str(exc), severity="error")
                 return
             self.notify(f"removed: {self.selected_loop_id}")
+            self.delete_armed = False
             self.selected_loop_id = None
             self.refresh_data()
 
