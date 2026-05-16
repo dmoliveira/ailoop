@@ -173,3 +173,28 @@ def test_unselected_detail_message_includes_counts(tmp_path: Path) -> None:
     text = app._unselected_detail_message()
     assert "loops: 1" in text
     assert "choose a loop" in text
+
+
+def test_summary_counts_reflect_state_buckets(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    service.create_loop(run_config, loop_id="one")
+    state = service.create_loop(run_config, loop_id="two")
+    service.request_control(state.loop_id, "pause")
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    assert app._summary_counts() == (2, 2, 1)

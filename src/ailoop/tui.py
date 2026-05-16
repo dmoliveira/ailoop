@@ -75,6 +75,12 @@ class LoopDashboard(App[None]):
         height: 1fr;
     }
 
+    #summary_bar {
+        height: auto;
+        padding: 0 1 1 1;
+        color: #cbd5e1;
+    }
+
     #sidebar {
         width: 38;
         min-width: 30;
@@ -131,6 +137,11 @@ class LoopDashboard(App[None]):
         background: #0b1220;
     }
 
+    #log_meta {
+        color: #94a3b8;
+        margin-bottom: 1;
+    }
+
     #detail_view {
         height: 1fr;
     }
@@ -182,6 +193,7 @@ class LoopDashboard(App[None]):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
+        yield Static("loading...", id="summary_bar")
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
                 yield Static("🔁 loops", classes="panel-title")
@@ -202,6 +214,7 @@ class LoopDashboard(App[None]):
                     yield Button("2 stderr", id="log-stderr")
                     yield Button("3 prompt", id="log-prompt")
                     yield Button("4 events", id="log-events")
+                yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
                 yield Static("ℹ details", classes="panel-title")
@@ -210,9 +223,27 @@ class LoopDashboard(App[None]):
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("Loop", "State", "Prog", "Run")
+        table.add_columns("Loop", "State", "Prog", "Agent", "Fail")
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
+
+    def _render_summary_bar(self) -> None:
+        total = len(self.service.list_loops())
+        active = sum(1 for state in self.service.list_loops() if state.status in ACTIVE_STATUSES)
+        running = sum(1 for state in self.service.list_loops() if state.status in RUNNING_STATUSES)
+        paused = sum(1 for state in self.service.list_loops() if state.status == "paused")
+        failed = sum(1 for state in self.service.list_loops() if state.status == "failed")
+        selected = self._selected_state()
+        selected_text = (
+            f"selected {short_loop_id(selected.loop_id)} · {short_status(selected.status)}"
+            if selected is not None
+            else "selected none"
+        )
+        summary_text = (
+            f"all {total} · active {active} · running {running} · paused {paused} · "
+            f"failed {failed} · filter {self.filter_mode} · log {self.log_kind} · {selected_text}"
+        )
+        self.query_one("#summary_bar", Static).update(summary_text)
 
     def _sync_button_state(self) -> None:
         state = self._selected_state()
@@ -340,7 +371,8 @@ class LoopDashboard(App[None]):
                 short_loop_id(state.loop_id),
                 f"{icon} {short_status(state.status)}",
                 progress,
-                state.run_config.runner,
+                (state.run_config.agent or "-")[:12],
+                str(state.consecutive_failures),
                 key=state.loop_id,
             )
 
@@ -350,6 +382,7 @@ class LoopDashboard(App[None]):
             except Exception:
                 pass
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def _selected_state(self):
@@ -362,10 +395,12 @@ class LoopDashboard(App[None]):
 
     def _render_selected(self) -> None:
         detail = self.query_one("#detail_view", Static)
+        log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
         if state is None:
             detail.update(self._unselected_detail_message())
+            log_meta.update(f"source {self.log_kind} · no loop selected")
             log_view.update(self._empty_loop_message())
             return
 
@@ -423,6 +458,9 @@ class LoopDashboard(App[None]):
         detail.update("\n".join(lines))
 
         paths = self.service.loop_paths(state.loop_id) if state.iterations else None
+        log_meta.update(
+            f"source {self.log_kind} · loop {short_loop_id(state.loop_id)} · refresh 1s"
+        )
         if self.log_kind == "events":
             if paths:
                 log_view.update(read_events(paths["events"]))
