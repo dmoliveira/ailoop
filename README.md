@@ -11,7 +11,7 @@
 [![Docs](https://img.shields.io/badge/docs-in_repo-1f6feb)](docs/index.md)
 [![Site](https://img.shields.io/badge/site-github_pages-2ea44f)](https://dmoliveira.github.io/ailoop/)
 [![Support](https://img.shields.io/badge/support-Stripe-635bff)](docs/support.md)
-[![Author](https://img.shields.io/badge/author-@dmoliveira-24292f)](https://github.com/dmoliveira)
+[![Diego Marinho](https://img.shields.io/badge/author-Diego%20Marinho-24292f)](https://github.com/dmoliveira)
 
 ![ailoop hero](docs/branding/hero-banner.svg)
 
@@ -21,7 +21,7 @@
 >
 > Docs: [GitHub Pages](https://dmoliveira.github.io/ailoop/) · [docs/index.md](docs/index.md)
 >
-> Author: [@dmoliveira](https://github.com/dmoliveira) · [LinkedIn](https://www.linkedin.com/in/dmoliveira/)
+> By: [Diego Marinho](https://github.com/dmoliveira) · [LinkedIn](https://www.linkedin.com/in/dmoliveira/)
 >
 > Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 
@@ -247,7 +247,7 @@ If `ailoop` saves you time, you can support ongoing maintenance and future relea
 
 - Stripe: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 
-Author:
+By Diego Marinho:
 
 - GitHub: [Diego Marinho](https://github.com/dmoliveira)
 - LinkedIn: [Diego Marinho](https://www.linkedin.com/in/dmoliveira/)
