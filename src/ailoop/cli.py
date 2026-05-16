@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from .tasks import (
     render_task_file_check,
     render_task_file_check_verbose,
 )
+from .tui import launch_in_tmux, run_tui
 
 TOP_LEVEL_DESCRIPTION = "Run AI terminal tools in repeatable, resumable loops."
 
@@ -38,6 +40,7 @@ Logical groups:
   Inspection:
     list           Show known loops and their current status
     ps             Short alias for: list --running
+    tui            Open the interactive dashboard
     status         Show one loop snapshot
     stats          Show one loop snapshot + recent history
     logs           Show log file paths or contents
@@ -48,6 +51,7 @@ Logical groups:
 
 Common usage:
   ailoop run "Review the repo" --runner opencode --agent orchestrator
+  ailoop tui
   ailoop ps
   ailoop status <loop-id>
   ailoop pause <loop-id>
@@ -227,6 +231,19 @@ def build_parser() -> argparse.ArgumentParser:
         help="Show all loops (default)",
     )
 
+    tui_parser = subparsers.add_parser(
+        "tui",
+        help="Open the interactive dashboard",
+        description="Open the interactive dashboard with loops, logs, and controls.",
+    )
+    tui_parser.add_argument("--loop-id", help="Preselect a loop id")
+    tui_parser.add_argument(
+        "--tmux",
+        action="store_true",
+        help="Run the dashboard inside a tmux session",
+    )
+    tui_parser.add_argument("--tmux-session", action="store_true", help=argparse.SUPPRESS)
+
     subparsers.add_parser(
         "ps",
         help="Alias for: list --running",
@@ -361,6 +378,13 @@ def main() -> None:
 
         if args.command == "task-template":
             print(TASK_FILE_GUIDE.rstrip() if args.with_rules else TASK_FILE_TEMPLATE.rstrip())
+            return
+
+        if args.command == "tui":
+            if args.tmux and not args.tmux_session and not os.environ.get("TMUX"):
+                launch_in_tmux(args.config, loop_id=args.loop_id)
+                return
+            run_tui(args.config, loop_id=args.loop_id)
             return
 
         if args.command == "check-task-file":

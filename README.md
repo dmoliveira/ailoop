@@ -150,6 +150,8 @@ Watch + inspect:
 
 ```bash
 ailoop ps
+ailoop tui
+ailoop tui --tmux
 ailoop list --active
 ailoop status <loop-id>
 ailoop stats <loop-id>
