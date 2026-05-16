@@ -163,6 +163,12 @@ class LoopDashboard(App[None]):
     log_kind: reactive[LogKind] = reactive("stdout")
     delete_armed: reactive[bool] = reactive(False)
 
+    def _summary_counts(self) -> tuple[int, int, int]:
+        states = self.service.list_loops()
+        running = sum(1 for state in states if state.status in RUNNING_STATUSES)
+        active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
+        return len(states), active, running
+
     def __init__(self, config_path: Path, loop_id: str | None = None) -> None:
         super().__init__()
         self.config_path = config_path
@@ -261,6 +267,45 @@ class LoopDashboard(App[None]):
             return [state for state in states if state.status in ACTIVE_STATUSES]
         return states
 
+    def _empty_loop_message(self) -> str:
+        total, active, running = self._summary_counts()
+        if total == 0:
+            return (
+                "No loops yet.\n\n"
+                "Start with:\n"
+                '  ailoop run "Review the repo"\n\n'
+                "Tip:\n"
+                "  q quit · r refresh"
+            )
+        if self.filter_mode == "running" and running == 0:
+            return (
+                "No running loops in this filter.\n\n"
+                f"All loops: {total} · active: {active}\n"
+                "Press l for all or a for active."
+            )
+        if self.filter_mode == "active" and active == 0:
+            return (
+                "No active loops in this filter.\n\n"
+                f"All loops: {total} · running: {running}\n"
+                "Press l for all or g for running."
+            )
+        return "No loops in the current filter."
+
+    def _unselected_detail_message(self) -> str:
+        total, active, running = self._summary_counts()
+        return "\n".join(
+            [
+                "overview",
+                f"loops: {total}",
+                f"active: {active}",
+                f"running: {running}",
+                "",
+                "choose a loop with ↑↓ or click a row",
+                "filters: g running · a active · l all",
+                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
+            ]
+        )
+
     def refresh_data(self) -> None:
         states = self._filtered_loops()
         table = self.query_one(DataTable)
@@ -279,6 +324,9 @@ class LoopDashboard(App[None]):
             self.selected_loop_id = states[0].loop_id
         if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
             self.selected_loop_id = states[0].loop_id if states else None
+
+        if not states:
+            table.add_row("-", self.filter_mode, "-", "-", key="empty")
 
         for state in states:
             target = state.run_config.steps
@@ -317,8 +365,8 @@ class LoopDashboard(App[None]):
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
         if state is None:
-            detail.update("No loop selected.")
-            log_view.update("No log.")
+            detail.update(self._unselected_detail_message())
+            log_view.update(self._empty_loop_message())
             return
 
         target = state.run_config.steps
@@ -330,8 +378,13 @@ class LoopDashboard(App[None]):
         lines = [
             f"{STATUS_ICONS.get(state.status, '•')} {state.loop_id}",
             "",
+            "summary",
+            f"status: {short_status(state.status)}",
+            f"runner: {state.run_config.runner}",
+            f"progress: {progress}",
+            f"last: {state.last_summary or '-'}",
+            "",
             "status",
-            f"state: {short_status(state.status)}",
             f"progress: {progress}",
             f"exit: {state.last_exit_code}",
             f"failures: {state.consecutive_failures}",
