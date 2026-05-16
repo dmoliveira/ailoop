@@ -6,7 +6,7 @@ If `ailoop` saves you time, you can support ongoing maintenance and future relea
 
 Author:
 
-- GitHub: https://github.com/dmoliveira
-- LinkedIn: https://www.linkedin.com/in/dmoliveira/
+- GitHub: [Diego Marinho](https://github.com/dmoliveira)
+- LinkedIn: [Diego Marinho](https://www.linkedin.com/in/dmoliveira/)
 
 Thank you for helping keep the project maintained.
