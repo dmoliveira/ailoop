@@ -139,3 +139,37 @@ def test_tui_remove_uses_force_for_paused_loop(tmp_path: Path) -> None:
 
     asyncio.run(run_test())
     assert seen == {"loop_id": "paused-loop", "force": True}
+
+
+def test_empty_loop_message_for_no_loops(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    text = app._empty_loop_message()
+    assert "No loops yet." in text
+    assert 'ailoop run "Review the repo"' in text
+
+
+def test_unselected_detail_message_includes_counts(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    service.create_loop(run_config, loop_id="loop-count")
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    text = app._unselected_detail_message()
+    assert "loops: 1" in text
+    assert "choose a loop" in text
