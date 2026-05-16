@@ -100,6 +100,26 @@
         padding: 48px 0 28px;
       }
 
+      .site-art {
+        position: fixed;
+        inset: 0;
+        z-index: 0;
+        pointer-events: none;
+        opacity: 0.42;
+        background-image: url("../branding/site-bg-loop-grid-arcs.svg");
+        background-position: center top;
+        background-repeat: no-repeat;
+        background-size: cover;
+        mix-blend-mode: screen;
+      }
+
+      main,
+      .topbar,
+      .footer {
+        position: relative;
+        z-index: 1;
+      }
+
       .hero-grid {
         display: grid;
         grid-template-columns: 1.15fr 0.85fr;
@@ -305,6 +325,7 @@
     </style>
   </head>
   <body>
+    <div class="site-art" aria-hidden="true"></div>
     <header class="topbar">
       <div class="wrap topbar-inner">
         <a class="brand" href="#top">ailoop 🔁</a>

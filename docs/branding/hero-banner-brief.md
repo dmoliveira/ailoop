@@ -40,6 +40,12 @@ Avoid:
 - too many icons
 - busy backgrounds
 
+Background motif ideas:
+
+- `site-bg-loop-grid-arcs.svg` — recommended; loop-grid arcs + faint terminal grid
+- `site-bg-orbital-dashes.svg` — dashed orbital paths
+- `site-bg-signal-contours.svg` — soft contour lines
+
 Prompt:
 
 ```text

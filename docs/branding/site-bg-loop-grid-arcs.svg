@@ -1,0 +1,20 @@
+<svg width="1600" height="1200" viewBox="0 0 1600 1200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g opacity="0.16">
+    <path d="M-80 380C120 380 120 180 320 180" stroke="#38BDF8" stroke-width="1.5"/>
+    <path d="M240 120C480 120 480 360 720 360" stroke="#8B5CF6" stroke-width="1.5"/>
+    <path d="M1010 40C1240 40 1240 280 1470 280" stroke="#14B8A6" stroke-width="1.5"/>
+    <path d="M980 420C1240 420 1240 700 1500 700" stroke="#38BDF8" stroke-width="1.5"/>
+    <path d="M-40 860C240 860 240 560 520 560" stroke="#8B5CF6" stroke-width="1.5"/>
+    <path d="M560 1020C820 1020 820 760 1080 760" stroke="#14B8A6" stroke-width="1.5"/>
+    <path d="M1130 980C1320 980 1320 790 1510 790" stroke="#38BDF8" stroke-width="1.5"/>
+  </g>
+  <g opacity="0.08">
+    <path d="M160 0V1200" stroke="#94A3B8" stroke-dasharray="6 10"/>
+    <path d="M520 0V1200" stroke="#94A3B8" stroke-dasharray="6 10"/>
+    <path d="M880 0V1200" stroke="#94A3B8" stroke-dasharray="6 10"/>
+    <path d="M1240 0V1200" stroke="#94A3B8" stroke-dasharray="6 10"/>
+    <path d="M0 240H1600" stroke="#94A3B8" stroke-dasharray="6 10"/>
+    <path d="M0 600H1600" stroke="#94A3B8" stroke-dasharray="6 10"/>
+    <path d="M0 960H1600" stroke="#94A3B8" stroke-dasharray="6 10"/>
+  </g>
+</svg>
