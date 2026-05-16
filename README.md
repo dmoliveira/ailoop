@@ -249,8 +249,8 @@ If `ailoop` saves you time, you can support ongoing maintenance and future relea
 
 Author:
 
-- GitHub: [@dmoliveira](https://github.com/dmoliveira)
-- LinkedIn: [Diego Marinho de Oliveira](https://www.linkedin.com/in/dmoliveira/)
+- GitHub: [Diego Marinho](https://github.com/dmoliveira)
+- LinkedIn: [Diego Marinho](https://www.linkedin.com/in/dmoliveira/)
 
 More: [docs/support.md](docs/support.md)
 
