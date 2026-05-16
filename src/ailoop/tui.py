@@ -10,7 +10,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Button, DataTable, Footer, Header, Static
+from textual.widgets import Button, DataTable, Header, Static
 
 from .service import LoopService
 from .stats import STATUS_ICONS
@@ -58,6 +58,10 @@ def short_status(status: str) -> str:
         "pause_requested": "pausing",
         "stop_requested": "stopping",
     }.get(status, status)
+
+
+def short_loop_id(loop_id: str) -> str:
+    return loop_id if len(loop_id) <= 12 else loop_id[:12]
 
 
 class LoopDashboard(App[None]):
@@ -113,6 +117,13 @@ class LoopDashboard(App[None]):
         margin-bottom: 1;
     }
 
+    .toolbar Button.active {
+        background: #1d4ed8;
+        color: #f8fafc;
+        text-style: bold;
+        border: round #38bdf8;
+    }
+
     #log_view {
         border: round #243244;
         height: 1fr;
@@ -123,15 +134,21 @@ class LoopDashboard(App[None]):
     #detail_view {
         height: 1fr;
     }
+
+    #help_bar {
+        height: auto;
+        color: #94a3b8;
+        padding: 0 1 1 1;
+    }
     """
 
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh_data", "Refresh"),
         ("p", "pause_selected", "Pause"),
-        ("e", "resume_selected", "Resume"),
+        ("u", "resume_selected", "Resume"),
         ("s", "stop_selected", "Stop"),
-        ("x", "remove_selected", "Remove"),
+        ("d", "remove_selected", "Delete"),
         ("1", "set_log_stdout", "Stdout"),
         ("2", "set_log_stderr", "Stderr"),
         ("3", "set_log_prompt", "Prompt"),
@@ -161,32 +178,52 @@ class LoopDashboard(App[None]):
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
                 yield Static("🔁 loops", classes="panel-title")
-                yield Static("g running · a active · l all")
+                with Horizontal(classes="toolbar"):
+                    yield Button("g running", id="filter-running")
+                    yield Button("a active", id="filter-active")
+                    yield Button("l all", id="filter-all")
                 yield DataTable(id="loops", zebra_stripes=True)
             with Vertical(id="content"):
-                yield Static("ailoop tui · click rows or use arrows · 1/2/3/4 switch log pane")
                 with Horizontal(classes="toolbar"):
                     yield Button("⟳ Refresh", id="refresh")
                     yield Button("⏸ Pause", id="pause")
                     yield Button("▶ Resume", id="resume")
                     yield Button("⏹ Stop", id="stop")
-                    yield Button("✖ Remove", id="remove")
+                    yield Button("✖ Delete", id="remove")
                 with Horizontal(classes="toolbar"):
-                    yield Button("stdout", id="log-stdout")
-                    yield Button("stderr", id="log-stderr")
-                    yield Button("prompt", id="log-prompt")
-                    yield Button("events", id="log-events")
+                    yield Button("1 stdout", id="log-stdout")
+                    yield Button("2 stderr", id="log-stderr")
+                    yield Button("3 prompt", id="log-prompt")
+                    yield Button("4 events", id="log-events")
                 yield Static(id="log_view")
             with Vertical(id="details"):
                 yield Static("ℹ details", classes="panel-title")
                 yield Static(id="detail_view")
-        yield Footer()
+        yield Static(
+            (
+                "nav ↑↓/click · filters g/a/l · actions p pause · u resume · "
+                "s stop · d delete · logs 1/2/3/4 · r refresh · q quit"
+            ),
+            id="help_bar",
+        )
 
     def on_mount(self) -> None:
         table = self.query_one(DataTable)
-        table.add_columns("ID", "State", "Prog", "Runner")
+        table.add_columns("Loop", "State", "Prog", "Run")
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
+
+    def _sync_button_state(self) -> None:
+        for button_id, active in {
+            "filter-running": self.filter_mode == "running",
+            "filter-active": self.filter_mode == "active",
+            "filter-all": self.filter_mode == "all",
+            "log-stdout": self.log_kind == "stdout",
+            "log-stderr": self.log_kind == "stderr",
+            "log-prompt": self.log_kind == "prompt",
+            "log-events": self.log_kind == "events",
+        }.items():
+            self.query_one(f"#{button_id}", Button).set_class(active, "active")
 
     def _filtered_loops(self):
         states = self.service.list_loops()
@@ -224,7 +261,7 @@ class LoopDashboard(App[None]):
             )
             icon = STATUS_ICONS.get(state.status, "•")
             table.add_row(
-                state.loop_id,
+                short_loop_id(state.loop_id),
                 f"{icon} {short_status(state.status)}",
                 progress,
                 state.run_config.runner,
@@ -236,6 +273,7 @@ class LoopDashboard(App[None]):
                 table.move_cursor(row=table.get_row_index(self.selected_loop_id))
             except Exception:
                 pass
+        self._sync_button_state()
         self._render_selected()
 
     def _selected_state(self):
@@ -263,14 +301,23 @@ class LoopDashboard(App[None]):
         )
         lines = [
             f"{STATUS_ICONS.get(state.status, '•')} {state.loop_id}",
+            "",
+            "status",
             f"state: {short_status(state.status)}",
-            f"runner: {state.run_config.runner}",
-            f"agent: {state.run_config.agent or '-'}",
             f"progress: {progress}",
             f"exit: {state.last_exit_code}",
             f"failures: {state.consecutive_failures}",
+            "",
+            "run",
+            f"runner: {state.run_config.runner}",
+            f"agent: {state.run_config.agent or '-'}",
+            f"control: {state.control}",
+            "",
+            "timing",
             f"avg: {state.average_duration_seconds:.2f}s",
             f"total: {state.total_duration_seconds:.2f}s",
+            "",
+            "note",
             f"last: {state.last_summary or '-'}",
         ]
         if state.run_config.task_file:
@@ -282,6 +329,7 @@ class LoopDashboard(App[None]):
                 lines.extend(
                     [
                         "",
+                        "task file",
                         f"task file: {state.run_config.task_file}",
                         (
                             f"tasks: to do {len(task_state.todo)} · doing "
@@ -323,8 +371,15 @@ class LoopDashboard(App[None]):
             self.action_stop_selected()
         elif button_id == "remove":
             self.action_remove_selected()
+        elif button_id == "filter-running":
+            self.action_filter_running()
+        elif button_id == "filter-active":
+            self.action_filter_active()
+        elif button_id == "filter-all":
+            self.action_filter_all()
         elif button_id and button_id.startswith("log-"):
             self.log_kind = button_id.removeprefix("log-")  # type: ignore[assignment]
+            self._sync_button_state()
             self._render_selected()
 
     def _spawn_resume(self, loop_id: str) -> None:
@@ -361,18 +416,22 @@ class LoopDashboard(App[None]):
 
     def action_set_log_stdout(self) -> None:
         self.log_kind = "stdout"
+        self._sync_button_state()
         self._render_selected()
 
     def action_set_log_stderr(self) -> None:
         self.log_kind = "stderr"
+        self._sync_button_state()
         self._render_selected()
 
     def action_set_log_prompt(self) -> None:
         self.log_kind = "prompt"
+        self._sync_button_state()
         self._render_selected()
 
     def action_set_log_events(self) -> None:
         self.log_kind = "events"
+        self._sync_button_state()
         self._render_selected()
 
     def action_pause_selected(self) -> None:
