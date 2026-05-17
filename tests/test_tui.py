@@ -473,7 +473,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.log_kind = "memory"
-    text = app._memory_help_text()
+    text = app._memory_help_text(width=120)
     assert "logs 1/2/3/4/5/6/7/m/0" in text
     assert "all" in text
     assert "1" in text
@@ -513,9 +513,9 @@ def test_memory_help_text_uses_compact_footer_at_80_columns(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=80)
-    assert "nav ↑↓ · g/a/l · logs 1/2/3/4/5/6/7/m/0 · r · q" in text
-    assert "mem all" in text
-    assert "1 ent" in text
+    assert "↑↓ g/a/l 1-7/m/0 r q" in text
+    assert "all - - cwd" in text
+    assert "1e" in text
     assert "[ ] b n c o / esc 8 9 z x" in text
 
 
