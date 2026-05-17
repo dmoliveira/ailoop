@@ -274,6 +274,69 @@ def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> No
     )
 
 
+def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Quick review",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    assert app._summary_selected_text(None) == f"memory all · selected {entry.id}"
+
+
+def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="history",
+        title="History One",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    text = app._memory_help_text()
+    assert "memory all" in text
+    assert "8 replay" in text
+    assert "no loop selected" not in text
+
+
 def test_memory_log_text_filters_to_favorites(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
