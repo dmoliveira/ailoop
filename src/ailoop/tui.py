@@ -17,7 +17,7 @@ from .stats import STATUS_ICONS
 from .tasks import parse_task_file
 
 FilterMode = Literal["running", "active", "all"]
-LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
+LogKind = Literal["stdout", "stderr", "prompt", "events"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
@@ -62,46 +62,6 @@ def short_status(status: str) -> str:
 
 def short_loop_id(loop_id: str) -> str:
     return loop_id if len(loop_id) <= 12 else loop_id[:12]
-
-
-def render_memory_commands(state) -> str:  # type: ignore[no-untyped-def]
-    title = f"Replay {short_loop_id(state.loop_id)}"
-    command = [
-        "ailoop",
-        "memory",
-        "save",
-        shlex.quote(title),
-        shlex.quote(state.run_config.prompt),
-    ]
-    if state.run_config.runner:
-        command.extend(["--runner", shlex.quote(state.run_config.runner)])
-    if state.run_config.agent:
-        command.extend(["--agent", shlex.quote(state.run_config.agent)])
-    if state.run_config.steps is not None:
-        command.extend(["--steps", str(state.run_config.steps)])
-    if state.run_config.pause_seconds is not None:
-        command.extend(["--pause-seconds", str(state.run_config.pause_seconds)])
-    if not state.run_config.pre_prompt_enabled:
-        command.append("--no-pre-prompt")
-    if not state.run_config.attach_agent_file:
-        command.append("--no-agent-file")
-    if state.run_config.agent_file:
-        command.extend(["--agent-file", shlex.quote(state.run_config.agent_file)])
-    if state.run_config.task_file:
-        command.extend(["--task-file", shlex.quote(state.run_config.task_file)])
-    if state.run_config.stop_when_tasks_complete:
-        command.append("--until-tasks-complete")
-    lines = [
-        "Save current loop as a preset:",
-        "",
-        "  " + " ".join(command),
-        "",
-        "Replay a saved entry later:",
-        "",
-        "  ailoop memory list",
-        "  ailoop replay <memory-id>",
-    ]
-    return "\n".join(lines)
 
 
 class LoopDashboard(App[None]):
@@ -204,8 +164,6 @@ class LoopDashboard(App[None]):
         ("2", "set_log_stderr", "Stderr"),
         ("3", "set_log_prompt", "Prompt"),
         ("4", "set_log_events", "Events"),
-        ("5", "set_log_memory", "Memory"),
-        ("m", "set_log_memory", "Memory"),
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
@@ -256,7 +214,6 @@ class LoopDashboard(App[None]):
                     yield Button("2 stderr", id="log-stderr")
                     yield Button("3 prompt", id="log-prompt")
                     yield Button("4 events", id="log-events")
-                    yield Button("5 memory", id="log-memory")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -303,7 +260,6 @@ class LoopDashboard(App[None]):
             "log-stderr": self.log_kind == "stderr",
             "log-prompt": self.log_kind == "prompt",
             "log-events": self.log_kind == "events",
-            "log-memory": self.log_kind == "memory",
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
         self.query_one("#pause", Button).disabled = not can_pause
@@ -315,7 +271,7 @@ class LoopDashboard(App[None]):
 
     def _render_help_bar(self, state: object | None) -> None:
         bar = self.query_one("#help_bar", Static)
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5 · r refresh · q quit"
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4 · r refresh · q quit"
         if state is None:
             bar.update(base + " · no loop selected")
             return
@@ -350,7 +306,7 @@ class LoopDashboard(App[None]):
                 "Start with:\n"
                 '  ailoop run "Review the repo"\n\n'
                 "Tip:\n"
-                "  q quit · r refresh · 5 memory"
+                "  q quit · r refresh"
             )
         if self.filter_mode == "running" and running == 0:
             return (
@@ -377,7 +333,7 @@ class LoopDashboard(App[None]):
                 "",
                 "choose a loop with ↑↓ or click a row",
                 "filters: g running · a active · l all",
-                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events · 5 memory",
+                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
             ]
         )
 
@@ -505,9 +461,6 @@ class LoopDashboard(App[None]):
         log_meta.update(
             f"source {self.log_kind} · loop {short_loop_id(state.loop_id)} · refresh 1s"
         )
-        if self.log_kind == "memory":
-            log_view.update(render_memory_commands(state))
-            return
         if self.log_kind == "events":
             if paths:
                 log_view.update(read_events(paths["events"]))
@@ -600,11 +553,6 @@ class LoopDashboard(App[None]):
 
     def action_set_log_events(self) -> None:
         self.log_kind = "events"
-        self._sync_button_state()
-        self._render_selected()
-
-    def action_set_log_memory(self) -> None:
-        self.log_kind = "memory"
         self._sync_button_state()
         self._render_selected()
 
