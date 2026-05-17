@@ -276,6 +276,36 @@ def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> No
     )
 
 
+def test_memory_log_meta_reports_all_folder_scope(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="One",
+        run_config=run_config,
+        folder=tmp_path / "other",
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.memory_all_folders = True
+    assert "scope all-folders" in app._memory_log_meta()
+
+
 def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -501,17 +531,21 @@ def test_memory_log_text_filters_to_presets(tmp_path: Path) -> None:
     assert "History One" not in text
 
 
-def test_set_log_memory_presets_resets_label_and_index(tmp_path: Path) -> None:
+def test_set_log_memory_presets_preserves_search_context(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory_filter = "history"
     app.memory_label = "ops"
+    app.memory_query = "night"
+    app.memory_all_folders = True
     app.memory_index = 3
     app._sync_button_state = lambda: None  # type: ignore[method-assign]
     app._render_selected = lambda: None  # type: ignore[method-assign]
     app.action_set_log_memory_presets()
     assert app.log_kind == "memory"
     assert app.memory_filter == "presets"
-    assert app.memory_label is None
+    assert app.memory_label == "ops"
+    assert app.memory_query == "night"
+    assert app.memory_all_folders is True
     assert app.memory_index == 0
 
 
@@ -665,6 +699,145 @@ def test_memory_label_clear_resets_filter(tmp_path: Path) -> None:
     app._render_selected = lambda: None  # type: ignore[method-assign]
     app.action_memory_label_clear()
     assert app.memory_label is None
+
+
+def test_memory_detail_text_lists_query_controls(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Ops entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["ops"],
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    text = app._memory_detail_text()
+    assert "scope: cwd" in text
+    assert "o toggle scope" in text
+    assert "/ focus query" in text
+    assert "esc clear query" in text
+
+
+def test_memory_scope_toggle_shows_entries_from_other_folders(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Local entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["ops"],
+    )
+    other_folder = tmp_path / "other"
+    other_folder.mkdir()
+    memory.create(
+        kind="preset",
+        title="Global entry",
+        run_config=run_config,
+        folder=other_folder,
+        labels=["docs"],
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    assert "Local entry" in app._memory_log_text()
+    assert "Global entry" not in app._memory_log_text()
+    app.action_memory_scope_toggle()
+    assert app.memory_all_folders is True
+    assert "Local entry" in app._memory_log_text()
+    assert "Global entry" in app._memory_log_text()
+
+
+def test_memory_empty_state_mentions_scope_toggle(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = MemoryStore(tmp_path)
+    text = app._memory_log_text()
+    assert "scope: cwd" in text
+    assert "Press o to show all folders." in text
+
+
+def test_memory_query_clear_resets_filter_and_widget(monkeypatch, tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Ops entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["ops", "nightly"],
+    )
+
+    class FakeInput:
+        def __init__(self) -> None:
+            self.value = "night"
+
+        def focus(self) -> None:
+            return None
+
+    widget = FakeInput()
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_query = "night"
+    app.memory_index = 1
+    app.memory_archive_armed = True
+    app.memory_delete_armed = True
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: widget)
+    app.action_memory_query_clear()
+    assert app.memory_query == ""
+    assert app.memory_index == 0
+    assert app.memory_archive_armed is False
+    assert app.memory_delete_armed is False
+    assert widget.value == ""
 
 
 def test_memory_replay_uses_top_filtered_entry(monkeypatch, tmp_path: Path) -> None:
