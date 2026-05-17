@@ -648,6 +648,40 @@ def test_memory_detail_text_includes_show_and_edit_commands(tmp_path: Path) -> N
     assert f"ailoop memory show {entry.id}" in text
     assert f"ailoop memory edit {entry.id} --title 'Quick review'" in text
     assert f"ailoop memory favorite {entry.id}" in text
+    assert f"ailoop memory archive {entry.id}" in text
+
+
+def test_memory_detail_text_uses_restore_command_for_archived_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Archived",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    memory.edit(entry.id, archived=True, folder=Path.cwd())
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_filter = "archived"
+    text = app._memory_detail_text()
+    assert f"ailoop memory archive {entry.id} --off" in text
 
 
 def test_memory_delete_requires_confirmation(tmp_path: Path) -> None:

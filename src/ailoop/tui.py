@@ -491,6 +491,11 @@ class LoopDashboard(App[None]):
             if not entry.favorite
             else f"ailoop memory favorite {entry.id} --off"
         )
+        archive_command = (
+            f"ailoop memory archive {entry.id} --off"
+            if entry.archived
+            else f"ailoop memory archive {entry.id}"
+        )
         return "\n".join(
             [
                 f"memory {entry.id}",
@@ -516,6 +521,7 @@ class LoopDashboard(App[None]):
                 show_command,
                 edit_command,
                 favorite_command,
+                archive_command,
                 "",
                 "actions",
                 "[ previous entry",
