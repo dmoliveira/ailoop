@@ -1214,6 +1214,27 @@ def test_memory_detail_text_uses_restore_command_for_archived_entry(tmp_path: Pa
     assert f"ailoop memory archive {entry.id} --off" in text
 
 
+def test_memory_detail_text_uses_memory_specific_empty_state(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = MemoryStore(tmp_path)
+    app.log_kind = "memory"
+    text = app._memory_detail_text()
+    assert "memory overview" in text
+    assert "no memory entry is selected" in text
+    assert "press 5 to refresh this filter" in text.lower()
+
+
+def test_memory_detail_text_uses_archived_empty_state(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = MemoryStore(tmp_path)
+    app.log_kind = "memory"
+    app.memory_filter = "archived"
+    text = app._memory_detail_text()
+    assert "memory overview" in text
+    assert "no archived entries match this view" in text
+    assert "press 5 to return to all entries" in text.lower()
+
+
 def test_memory_delete_requires_confirmation(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
