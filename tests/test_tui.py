@@ -665,3 +665,84 @@ def test_memory_delete_removes_selected_entry(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         memory.load(first.id, folder=Path.cwd())
     assert memory.load(second.id, folder=Path.cwd()).id == second.id
+
+
+def test_memory_archive_requires_confirmation(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Archive me",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app.action_memory_archive()
+    assert app.memory_archive_armed is True
+    assert memory.load(entry.id, folder=Path.cwd()).id == entry.id
+
+
+def test_memory_archive_hides_selected_entry_from_default_list(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    first = memory.create(
+        kind="preset",
+        title="First",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    second = memory.create(
+        kind="preset",
+        title="Second",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    app.action_memory_next()
+    app.action_memory_archive()
+    app.action_memory_archive()
+    entries = memory.list_entries(folder=Path.cwd())
+    assert [entry.id for entry in entries] == [second.id]
+    archived = memory.load(first.id, folder=Path.cwd())
+    assert archived.archived is True
