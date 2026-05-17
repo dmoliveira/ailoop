@@ -746,3 +746,79 @@ def test_memory_archive_hides_selected_entry_from_default_list(tmp_path: Path) -
     assert [entry.id for entry in entries] == [second.id]
     archived = memory.load(first.id, folder=Path.cwd())
     assert archived.archived is True
+
+
+def test_memory_archived_filter_lists_only_archived_entries(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    visible = memory.create(
+        kind="preset",
+        title="Visible",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    archived = memory.create(
+        kind="preset",
+        title="Archived",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    memory.edit(archived.id, archived=True, folder=Path.cwd())
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.memory_filter = "archived"
+    text = app._memory_log_text()
+    assert archived.id in text
+    assert visible.id not in text
+
+
+def test_memory_restore_unarchives_selected_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Archived",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    memory.edit(entry.id, archived=True, folder=Path.cwd())
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_filter = "archived"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app.action_memory_restore()
+    restored = memory.load(entry.id, folder=Path.cwd())
+    assert restored.archived is False
