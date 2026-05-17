@@ -360,6 +360,63 @@ def test_memory_list_filters_by_label(capsys, monkeypatch, tmp_path: Path) -> No
     assert [entry["id"] for entry in listed] == [tagged["id"]]
 
 
+def test_memory_list_filters_by_query(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Nightly Ops",
+            "Keep for later",
+            "--label",
+            "ops",
+        ],
+    )
+    main()
+    first = json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Docs Sweep",
+            "Something else",
+            "--label",
+            "docs",
+        ],
+    )
+    main()
+    json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "list",
+            "--query",
+            "nightly",
+        ],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in listed] == [first["id"]]
+
+
 def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 

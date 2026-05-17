@@ -213,6 +213,7 @@ class MemoryStore:
         favorites_only: bool = False,
         include_archived: bool = False,
         labels: list[str] | None = None,
+        query: str | None = None,
         all_folders: bool = False,
         folder: Path | None = None,
         user_id: str | None = None,
@@ -220,6 +221,7 @@ class MemoryStore:
         dirs = [self._kind_dir(kind)] if kind else [self.presets_dir, self.history_dir]
         entries: list[MemoryEntry] = []
         required_labels = set(labels or [])
+        query_text = (query or "").strip().lower()
         folder_path = str(folder.expanduser().resolve()) if folder else None
         actual_user = user_id or current_user_id()
         for directory in dirs:
@@ -231,6 +233,10 @@ class MemoryStore:
                     continue
                 if required_labels and not required_labels.issubset(set(entry.labels)):
                     continue
+                if query_text:
+                    haystack = " ".join([entry.id, entry.title, *entry.labels]).lower()
+                    if query_text not in haystack:
+                        continue
                 if entry.scope.user_id != actual_user:
                     continue
                 if not all_folders and folder_path and entry.scope.folder_path != folder_path:

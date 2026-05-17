@@ -273,6 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Require label (repeatable)",
     )
+    memory_list.add_argument("--query", help="Match title, id, or labels")
     memory_list.add_argument(
         "--all-folders",
         action="store_true",
@@ -621,6 +622,7 @@ def main() -> None:
                     favorites_only=args.favorites,
                     include_archived=args.archived,
                     labels=args.label,
+                    query=args.query,
                     all_folders=args.all_folders,
                     folder=Path.cwd(),
                 )
