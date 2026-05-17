@@ -302,6 +302,7 @@ class LoopDashboard(App[None]):
 
     def _memory_help_text(self) -> str:
         memory_actions = []
+        label_count = len(self._memory_labels())
         if self._primary_memory_entry() is not None:
             memory_actions.extend(
                 ["[ prev", "] next", "8 replay", "9 favorite", "z archive", "x delete"]
@@ -318,7 +319,7 @@ class LoopDashboard(App[None]):
         labels = len(self._memory_labels())
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
-            f"entries {entries} · labels {labels} · "
+            f"entries {entries} · labels {labels}/{label_count} · "
             f"actions {action_text}"
         )
 
@@ -547,6 +548,8 @@ class LoopDashboard(App[None]):
                 f"favorite: {entry.favorite}",
                 f"archived: {entry.archived}",
                 f"labels: {', '.join(entry.labels) or '-'}",
+                f"active label: {self.memory_label or '-'}",
+                f"available labels: {len(self._memory_labels())}",
                 "",
                 "usage",
                 f"used: {entry.use_count}",

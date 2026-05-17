@@ -305,6 +305,10 @@ def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_pat
     app.memory = memory
     app.log_kind = "memory"
     assert app._summary_selected_text(None) == f"memory all · labels 1 · selected {entry.id}"
+    app.memory_label = "ops"
+    text = app._memory_detail_text()
+    assert "active label: ops" in text
+    assert "available labels: 1" in text
 
 
 def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> None:
@@ -369,7 +373,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     text = app._memory_help_text()
     assert "memory all" in text
     assert "entries 1" in text
-    assert "labels 0" in text
+    assert "labels 0/0" in text
     assert "8 replay" in text
     assert "no loop selected" not in text
 
