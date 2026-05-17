@@ -348,3 +348,83 @@ def test_memory_log_text_filters_to_history(tmp_path: Path) -> None:
     text = app._memory_log_text()
     assert "History" in text
     assert "Preset" not in text
+
+
+def test_memory_replay_uses_top_filtered_entry(monkeypatch, tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="history",
+        title="Replay me",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    seen = {}
+
+    def fake_popen(command, stdout, stderr, start_new_session):  # type: ignore[no-untyped-def]
+        seen["command"] = command
+        seen["stdout"] = stdout
+        seen["stderr"] = stderr
+        seen["start_new_session"] = start_new_session
+        return subprocess.Popen  # type: ignore[return-value]
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_filter = "history"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app.action_memory_replay()
+    command = seen["command"]
+    assert command[-2:] == ["replay", entry.id]
+
+
+def test_memory_favorite_toggles_top_filtered_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Fav me",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_filter = "all"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app.action_memory_favorite()
+    updated = memory.load(entry.id, folder=Path.cwd())
+    assert updated.favorite is True
