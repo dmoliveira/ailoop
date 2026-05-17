@@ -6,7 +6,7 @@
     <title>ailoop — Repeatable AI terminal loops</title>
     <meta
       name="description"
-      content="Repeatable AI terminal loops with YAML config, durable state, task-file mode, pause/resume controls, and JSON-friendly output."
+      content="Repeatable AI terminal loops with YAML config, durable state, task-file mode, presets/history replay, pause/resume controls, and JSON-friendly output."
     />
     <style>
       :root {
@@ -343,10 +343,10 @@
       <section class="hero">
         <div class="wrap hero-grid">
           <div>
-            <div class="eyebrow">CLI · durable state · task files</div>
+            <div class="eyebrow">CLI · durable state · task files · presets</div>
             <h1>Run AI terminal tools in repeatable loops</h1>
             <p class="lead">
-              `ailoop` helps you replace brittle one-off shell loops with a safer flow built around YAML config, pause/resume, strict task files, durable state, and JSON-friendly output.
+              `ailoop` helps you replace brittle one-off shell loops with a safer flow built around YAML config, pause/resume, strict task files, durable state, saved presets/history, and JSON-friendly output.
             </p>
             <div class="cta-row">
               <a class="btn btn-primary" href="#quick-start">⚡ Get started</a>
@@ -360,6 +360,7 @@
             </div>
             <div class="chip-row" aria-label="Key features">
               <span class="chip">YAML config</span>
+              <span class="chip">presets + replay</span>
               <span class="chip">pause/resume</span>
               <span class="chip">JSON output</span>
               <span class="chip">OpenCode / Codex / Claude</span>
@@ -395,9 +396,10 @@ $ ailoop pause demo-loop
             <div class="feature"><h3>🔁 Repeatable runs</h3><p>Run forever or for a fixed number of steps with one command.</p></div>
             <div class="feature"><h3>⚙️ YAML config</h3><p>Keep defaults in one config file and override them per run.</p></div>
             <div class="feature"><h3>💾 Durable state</h3><p>Track loops on disk so pause, resume, status, and stats stay consistent.</p></div>
+            <div class="feature"><h3>🧠 Presets + history</h3><p>Save reusable run setups locally, favorite them, and replay them into new loops.</p></div>
             <div class="feature"><h3>⏸ Control flow</h3><p>Pause or stop active loops without killing the whole tool session.</p></div>
             <div class="feature"><h3>✅ Task file mode</h3><p>Use a strict Markdown task file when the loop should stop only after the list is done.</p></div>
-            <div class="feature"><h3>🧾 JSON output</h3><p>Use machine-friendly status, stats, logs, and task-file checks in scripts.</p></div>
+            <div class="feature"><h3>🧾 JSON output</h3><p>Use machine-friendly status, stats, logs, memory entries, and task-file checks in scripts.</p></div>
           </div>
         </div>
       </section>
@@ -427,6 +429,13 @@ ailoop tail &lt;loop-id&gt;
 ailoop pause &lt;loop-id&gt;
 ailoop resume &lt;loop-id&gt;
 ailoop status &lt;loop-id&gt;</pre>
+          </div>
+          <div class="card" style="margin-top: 16px;">
+            <h3>Save + replay</h3>
+            <pre>ailoop memory save "Quick review" "Review the repo." \
+  --runner opencode --agent orchestrator
+ailoop memory list
+ailoop replay &lt;memory-id&gt;</pre>
           </div>
         </div>
       </section>
@@ -483,6 +492,7 @@ ailoop run "Work the task list." \
           <div class="docs-grid">
             <a href="https://github.com/dmoliveira/ailoop#readme"><strong>README</strong><span>Main project overview and quick start.</span></a>
             <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/task-file.md"><strong>Task file</strong><span>Strict Markdown format, rules, and stop behavior.</span></a>
+            <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/memory.md"><strong>Memory</strong><span>Presets, history, replay, and scope behavior.</span></a>
             <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/config.md"><strong>Config</strong><span>Defaults, paths, and config layering.</span></a>
             <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/examples.md"><strong>Examples</strong><span>Copy-paste command examples.</span></a>
             <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/runners.md"><strong>Runners</strong><span>Runner model and command templates.</span></a>
@@ -495,7 +505,7 @@ ailoop run "Work the task list." \
       <div class="wrap footer-card">
         <strong>ailoop</strong>
         <p style="margin: 10px 0 14px; line-height: 1.7;">
-          A small CLI for repeatable AI terminal loops with YAML config, durable state, task-file mode, pause/resume, and stats.
+          A small CLI for repeatable AI terminal loops with YAML config, durable state, task-file mode, presets/history replay, pause/resume, and stats.
         </p>
         <div class="support-card">
           <strong>Support ailoop 💛</strong>
