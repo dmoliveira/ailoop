@@ -69,6 +69,52 @@ def test_init_task_file_and_check_task_file(capsys, monkeypatch, tmp_path: Path)
     assert "⏳ open" in out
 
 
+def test_check_task_file_uses_configured_max_doing(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"""
+default_runner: test
+default_agent: orchestrator
+paths:
+  agent_file: null
+  state_dir: {tmp_path / 'state'}
+prompt:
+  pre_prompt_enabled: false
+  attach_agent_file: false
+  pre_prompt: ""
+loop:
+  steps: null
+  pause_seconds: 0
+  continue_on_error: true
+  retry_count: 0
+tasks:
+  file: null
+  stop_when_complete: false
+  max_doing: 2
+runners:
+  test:
+    command: python3
+    args: ["-c", "print('ok')"]
+    env: {{}}
+""".strip()
+    )
+    path = tmp_path / "tasks.md"
+    path.write_text(
+        "# Loop Tasks\n\n"
+        "## To do\n- None\n\n"
+        "## Doing\n- [ ] First task\n- [ ] Second task\n\n"
+        "## Done\n- None\n"
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "check-task-file", str(path)],
+    )
+    main()
+    out = capsys.readouterr().out
+    assert "⏳ open" in out
+
+
 def test_memory_save_list_show_and_edit(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 
