@@ -12,7 +12,7 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, DataTable, Header, Static
 
-from .memory import MemoryStore, render_memory_list
+from .memory import MemoryStore
 from .service import LoopService
 from .stats import STATUS_ICONS
 from .tasks import parse_task_file
@@ -171,6 +171,8 @@ class LoopDashboard(App[None]):
         ("7", "set_log_memory_history", "History"),
         ("8", "memory_replay", "Replay Memory"),
         ("9", "memory_favorite", "Toggle Favorite"),
+        ("[", "memory_prev", "Prev Memory"),
+        ("]", "memory_next", "Next Memory"),
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
@@ -180,6 +182,7 @@ class LoopDashboard(App[None]):
     filter_mode: reactive[FilterMode] = reactive("running")
     log_kind: reactive[LogKind] = reactive("stdout")
     memory_filter: reactive[MemoryFilter] = reactive("all")
+    memory_index: reactive[int] = reactive(0)
     delete_armed: reactive[bool] = reactive(False)
 
     def _summary_counts(self) -> tuple[int, int, int]:
@@ -302,7 +305,7 @@ class LoopDashboard(App[None]):
         if self.log_kind == "memory":
             memory_actions = []
             if self._primary_memory_entry() is not None:
-                memory_actions.extend(["8 replay", "9 favorite"])
+                memory_actions.extend(["[ prev", "] next", "8 replay", "9 favorite"])
             action_text = " · ".join(memory_actions) if memory_actions else "read only"
             bar.update(f"{base} · memory {self.memory_filter} · actions {action_text}")
             return
@@ -376,22 +379,42 @@ class LoopDashboard(App[None]):
             return self.memory.list_entries(folder=Path.cwd(), kind="history")
         return self.memory.list_entries(folder=Path.cwd())
 
+    def _selected_memory_index(self) -> int:
+        entries = self._memory_entries()
+        if not entries:
+            return 0
+        return max(0, min(self.memory_index, len(entries) - 1))
+
     def _primary_memory_entry(self):
         entries = self._memory_entries()
-        return entries[0] if entries else None
+        if not entries:
+            return None
+        return entries[self._selected_memory_index()]
 
     def _memory_log_meta(self) -> str:
         entries = self._memory_entries()
         favorites = sum(1 for entry in entries if entry.favorite)
+        selected = self._selected_memory_index() + 1 if entries else 0
         return (
-            f"source memory · filter {self.memory_filter} · entries {len(entries)} · "
+            f"source memory · filter {self.memory_filter} · selected {selected}/{len(entries)} · "
             f"favorites {favorites} · scope cwd"
         )
 
     def _memory_log_text(self) -> str:
         entries = self._memory_entries()
         if entries:
-            return render_memory_list(entries)
+            selected_index = self._selected_memory_index()
+            lines = [
+                "Sel  ID             Kind     Fav  Title",
+                "---  -------------  -------  ---  -----",
+            ]
+            for index, entry in enumerate(entries):
+                marker = ">" if index == selected_index else " "
+                star = "★" if entry.favorite else "-"
+                lines.append(
+                    f" {marker}   {entry.id:<13}  {entry.kind:<7}  {star:<3}  {entry.title}"
+                )
+            return "\n".join(lines)
         return (
             "No memory entries found.\n\n"
             "Create one with:\n"
@@ -443,6 +466,8 @@ class LoopDashboard(App[None]):
                 favorite_command,
                 "",
                 "actions",
+                "[ previous entry",
+                "] next entry",
                 "8 replay top entry",
                 "9 toggle favorite",
             ]
@@ -696,18 +721,38 @@ class LoopDashboard(App[None]):
     def action_set_log_memory(self) -> None:
         self.log_kind = "memory"
         self.memory_filter = "all"
+        self.memory_index = 0
         self._sync_button_state()
         self._render_selected()
 
     def action_set_log_memory_favorites(self) -> None:
         self.log_kind = "memory"
         self.memory_filter = "favorites"
+        self.memory_index = 0
         self._sync_button_state()
         self._render_selected()
 
     def action_set_log_memory_history(self) -> None:
         self.log_kind = "memory"
         self.memory_filter = "history"
+        self.memory_index = 0
+        self._sync_button_state()
+        self._render_selected()
+
+    def _move_memory_selection(self, delta: int) -> None:
+        entries = self._memory_entries()
+        if not entries:
+            self.memory_index = 0
+            return
+        self.memory_index = (self._selected_memory_index() + delta) % len(entries)
+
+    def action_memory_prev(self) -> None:
+        self._move_memory_selection(-1)
+        self._sync_button_state()
+        self._render_selected()
+
+    def action_memory_next(self) -> None:
+        self._move_memory_selection(1)
         self._sync_button_state()
         self._render_selected()
 
