@@ -462,6 +462,59 @@ def test_memory_log_text_filters_to_history(tmp_path: Path) -> None:
     assert "Preset" not in text
 
 
+def test_memory_log_text_filters_to_presets(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Preset One",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    memory.create(
+        kind="history",
+        title="History One",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.memory_filter = "presets"
+    text = app._memory_log_text()
+    assert "Preset One" in text
+    assert "History One" not in text
+
+
+def test_set_log_memory_presets_resets_label_and_index(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory_filter = "history"
+    app.memory_label = "ops"
+    app.memory_index = 3
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    app.action_set_log_memory_presets()
+    assert app.log_kind == "memory"
+    assert app.memory_filter == "presets"
+    assert app.memory_label is None
+    assert app.memory_index == 0
+
+
 def test_memory_log_text_filters_to_selected_label(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(

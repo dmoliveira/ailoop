@@ -19,7 +19,7 @@ from .tasks import parse_task_file
 
 FilterMode = Literal["running", "active", "all"]
 LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
-MemoryFilter = Literal["all", "favorites", "history", "archived"]
+MemoryFilter = Literal["all", "favorites", "history", "archived", "presets"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
@@ -169,6 +169,7 @@ class LoopDashboard(App[None]):
         ("5", "set_log_memory", "Memory"),
         ("6", "set_log_memory_favorites", "Favorites"),
         ("7", "set_log_memory_history", "History"),
+        ("m", "set_log_memory_presets", "Presets"),
         ("0", "set_log_memory_archived", "Archived"),
         ("b", "memory_label_prev", "Prev Label"),
         ("n", "memory_label_next", "Next Label"),
@@ -239,6 +240,7 @@ class LoopDashboard(App[None]):
                     yield Button("5 memory", id="log-memory")
                     yield Button("6 favorites", id="log-memory-favorites")
                     yield Button("7 history", id="log-memory-history")
+                    yield Button("m presets", id="log-memory-presets")
                     yield Button("0 archived", id="log-memory-archived")
                     yield Button("b label<", id="memory-label-prev")
                     yield Button("n label>", id="memory-label-next")
@@ -352,6 +354,7 @@ class LoopDashboard(App[None]):
             "log-memory": self.log_kind == "memory" and self.memory_filter == "all",
             "log-memory-favorites": self.log_kind == "memory" and self.memory_filter == "favorites",
             "log-memory-history": self.log_kind == "memory" and self.memory_filter == "history",
+            "log-memory-presets": self.log_kind == "memory" and self.memory_filter == "presets",
             "log-memory-archived": self.log_kind == "memory" and self.memory_filter == "archived",
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
@@ -451,7 +454,7 @@ class LoopDashboard(App[None]):
                 "choose a loop with ↑↓ or click a row",
                 "filters: g running · a active · l all",
                 "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
-                "      5 memory · 6 favorites · 7 history · 0 archived",
+                "      5 memory · 6 favorites · 7 history · m presets · 0 archived",
             ]
         )
 
@@ -466,6 +469,8 @@ class LoopDashboard(App[None]):
             return self.memory.list_entries(folder=Path.cwd(), favorites_only=True)
         if self.memory_filter == "history":
             return self.memory.list_entries(folder=Path.cwd(), kind="history")
+        if self.memory_filter == "presets":
+            return self.memory.list_entries(folder=Path.cwd(), kind="preset")
         if self.memory_filter == "archived":
             return [
                 entry
@@ -529,6 +534,7 @@ class LoopDashboard(App[None]):
             "all": "5",
             "favorites": "6",
             "history": "7",
+            "presets": "m",
             "archived": "0",
         }[self.memory_filter]
 
@@ -755,6 +761,8 @@ class LoopDashboard(App[None]):
             self.action_filter_active()
         elif button_id == "filter-all":
             self.action_filter_all()
+        elif button_id == "log-memory-presets":
+            self.action_set_log_memory_presets()
         elif button_id == "memory-label-prev":
             self.action_memory_label_prev()
         elif button_id == "memory-label-next":
@@ -871,6 +879,16 @@ class LoopDashboard(App[None]):
     def action_set_log_memory_history(self) -> None:
         self.log_kind = "memory"
         self.memory_filter = "history"
+        self.memory_label = None
+        self.memory_index = 0
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
+        self._sync_button_state()
+        self._render_selected()
+
+    def action_set_log_memory_presets(self) -> None:
+        self.log_kind = "memory"
+        self.memory_filter = "presets"
         self.memory_label = None
         self.memory_index = 0
         self.memory_archive_armed = False
