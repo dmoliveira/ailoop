@@ -305,7 +305,17 @@ class LoopDashboard(App[None]):
         label_count = len(self._memory_labels())
         if self._primary_memory_entry() is not None:
             memory_actions.extend(
-                ["[ prev", "] next", "8 replay", "9 favorite", "z archive", "x delete"]
+                [
+                    "[ prev",
+                    "] next",
+                    "b label<",
+                    "n label>",
+                    "c labelx",
+                    "8 replay",
+                    "9 favorite",
+                    "z archive",
+                    "x delete",
+                ]
             )
             if self._primary_memory_entry().archived:  # type: ignore[union-attr]
                 memory_actions.append("v restore")
@@ -570,6 +580,9 @@ class LoopDashboard(App[None]):
                 "actions",
                 "[ previous entry",
                 "] next entry",
+                "b previous label",
+                "n next label",
+                "c clear label",
                 "8 replay top entry",
                 "9 toggle favorite",
                 "v restore selected entry",
