@@ -174,6 +174,8 @@ class LoopDashboard(App[None]):
         ("b", "memory_label_prev", "Prev Label"),
         ("n", "memory_label_next", "Next Label"),
         ("c", "memory_label_clear", "Clear Label"),
+        ("/", "memory_query_focus", "Focus Query"),
+        ("escape", "memory_query_clear", "Clear Query"),
         ("8", "memory_replay", "Replay Memory"),
         ("9", "memory_favorite", "Toggle Favorite"),
         ("v", "memory_restore", "Restore Memory"),
@@ -315,6 +317,8 @@ class LoopDashboard(App[None]):
                     "b label<",
                     "n label>",
                     "c labelx",
+                    "/ query",
+                    "esc queryx",
                     "8 replay",
                     "9 favorite",
                     "z archive",
@@ -601,6 +605,8 @@ class LoopDashboard(App[None]):
                 "b previous label",
                 "n next label",
                 "c clear label",
+                "/ focus query",
+                "esc clear query",
                 "8 replay top entry",
                 "9 toggle favorite",
                 "v restore selected entry",
@@ -798,7 +804,10 @@ class LoopDashboard(App[None]):
 
     @on(Input.Changed, "#memory-query")
     def on_memory_query_changed(self, event: Input.Changed) -> None:
-        self.memory_query = event.value.strip()
+        self._apply_memory_query(event.value)
+
+    def _apply_memory_query(self, value: str) -> None:
+        self.memory_query = value.strip()
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -981,6 +990,17 @@ class LoopDashboard(App[None]):
         self.memory_index = 0
         self._sync_button_state()
         self._render_selected()
+
+    def action_memory_query_focus(self) -> None:
+        if self.log_kind != "memory":
+            return
+        self.query_one("#memory-query", Input).focus()
+
+    def action_memory_query_clear(self) -> None:
+        if self.log_kind != "memory" and not self.memory_query:
+            return
+        self._apply_memory_query("")
+        self.query_one("#memory-query", Input).value = ""
 
     def action_memory_next(self) -> None:
         self._move_memory_selection(1)

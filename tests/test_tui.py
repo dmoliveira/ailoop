@@ -667,6 +667,89 @@ def test_memory_label_clear_resets_filter(tmp_path: Path) -> None:
     assert app.memory_label is None
 
 
+def test_memory_detail_text_lists_query_controls(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Ops entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["ops"],
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    text = app._memory_detail_text()
+    assert "/ focus query" in text
+    assert "esc clear query" in text
+
+
+def test_memory_query_clear_resets_filter_and_widget(monkeypatch, tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Ops entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["ops", "nightly"],
+    )
+
+    class FakeInput:
+        def __init__(self) -> None:
+            self.value = "night"
+
+        def focus(self) -> None:
+            return None
+
+    widget = FakeInput()
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_query = "night"
+    app.memory_index = 1
+    app.memory_archive_armed = True
+    app.memory_delete_armed = True
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    monkeypatch.setattr(app, "query_one", lambda *args, **kwargs: widget)
+    app.action_memory_query_clear()
+    assert app.memory_query == ""
+    assert app.memory_index == 0
+    assert app.memory_archive_armed is False
+    assert app.memory_delete_armed is False
+    assert widget.value == ""
+
+
 def test_memory_replay_uses_top_filtered_entry(monkeypatch, tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
