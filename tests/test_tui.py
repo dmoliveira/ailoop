@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ailoop.models import LoopRunConfig
 from ailoop.service import LoopService
-from ailoop.tui import LoopDashboard, launch_in_tmux, tail_text
+from ailoop.tui import LoopDashboard, launch_in_tmux, render_memory_commands, tail_text
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
@@ -198,3 +198,67 @@ def test_summary_counts_reflect_state_buckets(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
     assert app._summary_counts() == (2, 2, 1)
+
+
+def test_render_memory_commands_includes_save_and_replay(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo and keep iterating.",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        task_file=str(tmp_path / "tasks.md"),
+        stop_when_tasks_complete=True,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="memory-loop")
+    text = render_memory_commands(state)
+    assert "ailoop memory save" in text
+    assert "--runner opencode" in text
+    assert "--agent orchestrator" in text
+    assert "--until-tasks-complete" in text
+    assert "ailoop replay <memory-id>" in text
+
+
+def test_memory_log_view_renders_for_selected_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="memory-view")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            app.action_set_log_memory()
+            await pilot.pause()
+            assert app.log_kind == "memory"
+
+    import asyncio
+
+    asyncio.run(run_test())
