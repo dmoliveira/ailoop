@@ -1415,6 +1415,16 @@ def test_memory_archived_filter_lists_only_archived_entries(tmp_path: Path) -> N
     assert visible.id not in text
 
 
+def test_memory_archived_empty_state_mentions_archive_flow(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = MemoryStore(tmp_path)
+    app.memory_filter = "archived"
+    text = app._memory_log_text()
+    assert "No archived memory entries found." in text
+    assert "z twice" in text
+    assert "press 5 for all entries" in text.lower()
+
+
 def test_memory_restore_unarchives_selected_entry(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
