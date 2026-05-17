@@ -211,6 +211,7 @@ class MemoryStore:
         *,
         kind: MemoryKind | None = None,
         favorites_only: bool = False,
+        include_archived: bool = False,
         all_folders: bool = False,
         folder: Path | None = None,
         user_id: str | None = None,
@@ -222,6 +223,8 @@ class MemoryStore:
         for directory in dirs:
             for path in sorted(directory.glob("*.json")):
                 entry = MemoryEntry.from_dict(json.loads(path.read_text()))
+                if entry.archived and not include_archived:
+                    continue
                 if favorites_only and not entry.favorite:
                     continue
                 if entry.scope.user_id != actual_user:
@@ -287,6 +290,7 @@ class MemoryStore:
         title: str | None = None,
         labels: list[str] | None = None,
         favorite: bool | None = None,
+        archived: bool | None = None,
         change_note: str | None = None,
         token_ref: str | None = None,
         folder: Path | None = None,
@@ -303,6 +307,8 @@ class MemoryStore:
             entry.labels = labels
         if favorite is not None:
             entry.favorite = favorite
+        if archived is not None:
+            entry.archived = archived
         if run_config is not None:
             version = entry.latest_version + 1
             snapshot = snapshot_from_run_config(
