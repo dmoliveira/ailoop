@@ -44,17 +44,6 @@ ailoop ps
 ailoop tail <loop-id>
 ```
 
-TUI memory view:
-
-```text
-ailoop tui
-
-Inside the TUI:
-- select a loop
-- press 5 or m for the memory view
-- copy the suggested `ailoop memory save ...` command
-```
-
 JSON:
 
 ```bash
