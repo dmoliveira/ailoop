@@ -64,8 +64,40 @@ Favorite or delete:
 ```bash
 ailoop memory favorite <memory-id>
 ailoop memory favorite <memory-id> --off
+ailoop memory archive <memory-id>
+ailoop memory archive <memory-id> --off
 ailoop memory delete <memory-id>
 ```
+
+## TUI workflow
+
+Open the dashboard:
+
+```bash
+ailoop tui
+ailoop tui --tmux
+```
+
+Memory filters:
+
+- `5`: all entries
+- `6`: favorites only
+- `7`: history only
+- `m`: presets only
+- `0`: archived only
+
+Memory navigation + actions:
+
+- `[` / `]`: move between visible memory entries
+- `b` / `n`: cycle label filters
+- `c`: clear active label filter
+- `8`: replay selected entry
+- `9`: toggle favorite on selected entry
+- `z`: archive selected entry, then confirm with `z`
+- `v`: restore selected archived entry
+- `x`: delete selected entry, then confirm with `x`
+
+The detail pane shows direct CLI equivalents for `show`, `edit`, `favorite`, and `archive` on the selected memory entry.
 
 ## Scope behavior
 
