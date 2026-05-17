@@ -304,6 +304,38 @@ def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_pat
     assert app._summary_selected_text(None) == f"memory all · selected {entry.id}"
 
 
+def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Quick review",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    text = app._summary_bar_text(0, 0, 0, 0, 0, None)
+    assert f"memory all · selected {entry.id}" in text
+    assert "log memory" not in text
+
+
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(

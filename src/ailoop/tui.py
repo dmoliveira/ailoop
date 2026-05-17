@@ -261,12 +261,26 @@ class LoopDashboard(App[None]):
         paused = sum(1 for state in self.service.list_loops() if state.status == "paused")
         failed = sum(1 for state in self.service.list_loops() if state.status == "failed")
         selected = self._selected_state()
-        selected_text = self._summary_selected_text(selected)
-        summary_text = (
-            f"all {total} · active {active} · running {running} · paused {paused} · "
-            f"failed {failed} · filter {self.filter_mode} · log {self.log_kind} · {selected_text}"
-        )
+        summary_text = self._summary_bar_text(total, active, running, paused, failed, selected)
         self.query_one("#summary_bar", Static).update(summary_text)
+
+    def _summary_bar_text(
+        self,
+        total: int,
+        active: int,
+        running: int,
+        paused: int,
+        failed: int,
+        state: object | None,
+    ) -> str:
+        selected_text = self._summary_selected_text(state)
+        base = (
+            f"all {total} · active {active} · running {running} · paused {paused} · "
+            f"failed {failed}"
+        )
+        if self.log_kind == "memory":
+            return f"{base} · filter {self.filter_mode} · {selected_text}"
+        return f"{base} · filter {self.filter_mode} · log {self.log_kind} · {selected_text}"
 
     def _summary_selected_text(self, state: object | None) -> str:
         if self.log_kind == "memory":
