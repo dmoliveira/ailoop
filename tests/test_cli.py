@@ -188,6 +188,16 @@ def test_memory_save_list_show_and_edit(capsys, monkeypatch, tmp_path: Path) -> 
     assert "Quick review v2" in shown
     assert "prompt: Review the repo again" in shown
 
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "list", "--kind", "preset"],
+    )
+    main()
+    listed_text = capsys.readouterr().out
+    assert "Used" in listed_text
+    assert "Labels" in listed_text
+    assert "updated" in listed_text
+
 
 def test_memory_favorite_and_delete(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)

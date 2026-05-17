@@ -469,14 +469,17 @@ class LoopDashboard(App[None]):
         if entries:
             selected_index = self._selected_memory_index()
             lines = [
-                "Sel  ID             Kind     Fav  Title",
-                "---  -------------  -------  ---  -----",
+                "Sel  ID             Kind     Fav  Used  Labels       Title",
+                "---  -------------  -------  ---  ----  -----------  -----",
             ]
             for index, entry in enumerate(entries):
                 marker = ">" if index == selected_index else " "
                 star = "★" if entry.favorite else "-"
+                labels = ",".join(entry.labels[:2]) or "-"
                 lines.append(
-                    f" {marker}   {entry.id:<13}  {entry.kind:<7}  {star:<3}  {entry.title}"
+                    f" {marker}   {entry.id:<13}  {entry.kind:<7}  {star:<3}  "
+                    f"{entry.use_count:<4}  "
+                    f"{labels:<11}  {entry.title}"
                 )
             return "\n".join(lines)
         return (

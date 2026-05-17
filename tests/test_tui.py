@@ -233,6 +233,8 @@ def test_memory_log_text_lists_entries_with_kind_and_favorite(tmp_path: Path) ->
     assert "Quick review" in text
     assert "preset" in text
     assert "★" in text
+    assert "Used" in text
+    assert "Labels" in text
 
 
 def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> None:
