@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from .config import default_config_path, init_config_text, load_app_config, resolve_run_config
+from .memory import MemoryStore, render_memory_list, render_memory_show, run_config_from_entry
 from .paths import ensure_dir
 from .service import LoopService
 from .stats import get_color_mode, render_loop_list, render_stats, render_status, set_color_mode
@@ -32,6 +33,15 @@ Logical groups:
   Loop execution:
     run            Start a new loop
     resume         Continue a paused or stopped loop
+    replay         Run a saved preset or history entry
+
+  Memory:
+    memory save    Save a preset or history entry
+    memory list    List saved memory entries
+    memory show    Show one memory entry
+    memory edit    Update a saved memory entry
+    memory favorite Mark or unmark a favorite entry
+    memory delete  Delete a saved memory entry
 
   Loop control:
     pause          Ask a running loop to pause after the current iteration
@@ -51,6 +61,8 @@ Logical groups:
 
 Common usage:
   ailoop run "Review the repo" --runner opencode --agent orchestrator
+  ailoop memory save "Quick review" "Review the repo" --runner opencode
+  ailoop replay <memory-id>
   ailoop tui
   ailoop ps
   ailoop status <loop-id>
@@ -194,6 +206,143 @@ def build_parser() -> argparse.ArgumentParser:
         description="Resume a previously paused or stopped loop.",
     )
     resume_parser.add_argument("loop_id", help="Loop id to resume")
+
+    replay_parser = subparsers.add_parser(
+        "replay",
+        help="Replay a saved memory entry",
+        description="Create and run a new loop from a saved preset or history entry.",
+    )
+    replay_parser.add_argument("entry_id", help="Saved memory entry id")
+    replay_parser.add_argument("--loop-id", help="Optional custom loop id")
+
+    memory_parser = subparsers.add_parser(
+        "memory",
+        help="Manage saved presets and history entries",
+        description="Save, inspect, update, and reuse saved presets/history entries.",
+    )
+    memory_subparsers = memory_parser.add_subparsers(dest="memory_command", required=True)
+
+    memory_save = memory_subparsers.add_parser(
+        "save",
+        help="Save a memory entry",
+        description="Save a preset or history entry from run-style configuration flags.",
+    )
+    memory_save.add_argument("title", help="Entry title")
+    memory_save.add_argument("prompt", help="Prompt to save")
+    memory_save.add_argument("--kind", choices=["preset", "history"], default="preset")
+    memory_save.add_argument("--runner", help="Runner name override")
+    memory_save.add_argument("--agent", help="Agent override")
+    memory_save.add_argument("--steps", type=int, help="Saved step limit")
+    memory_save.add_argument("--pause-seconds", type=int, help="Saved pause between iterations")
+    memory_save.add_argument(
+        "--no-pre-prompt",
+        action="store_true",
+        help="Disable the configured pre-prompt",
+    )
+    memory_save.add_argument(
+        "--no-agent-file",
+        action="store_true",
+        help="Do not attach AGENTS.md / instruction file contents",
+    )
+    memory_save.add_argument("--agent-file", help="Override the AGENTS.md / instruction file path")
+    memory_save.add_argument("--task-file", help="Saved task file path")
+    memory_save.add_argument(
+        "--until-tasks-complete",
+        action="store_true",
+        help="Stop when To do and Doing are empty in the task file",
+    )
+    memory_save.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        help="Label to attach (repeatable)",
+    )
+    memory_save.add_argument("--favorite", action="store_true", help="Mark the entry as favorite")
+
+    memory_list = memory_subparsers.add_parser(
+        "list",
+        help="List memory entries",
+        description="List saved presets and history entries.",
+    )
+    memory_list.add_argument("--kind", choices=["all", "preset", "history"], default="all")
+    memory_list.add_argument("--favorites", action="store_true", help="Show only favorite entries")
+    memory_list.add_argument(
+        "--all-folders",
+        action="store_true",
+        help="Show entries from all folders for the current user",
+    )
+
+    memory_show = memory_subparsers.add_parser(
+        "show",
+        help="Show one memory entry",
+        description="Show one saved preset or history entry.",
+    )
+    memory_show.add_argument("entry_id", help="Saved memory entry id")
+
+    memory_edit = memory_subparsers.add_parser(
+        "edit",
+        help="Edit a memory entry",
+        description="Update metadata or saved run configuration for a memory entry.",
+    )
+    memory_edit.add_argument("entry_id", help="Saved memory entry id")
+    memory_edit.add_argument("--title", help="New title")
+    memory_edit.add_argument("--prompt", help="New saved prompt")
+    memory_edit.add_argument("--runner", help="New runner name")
+    memory_edit.add_argument("--agent", help="New agent override")
+    memory_edit.add_argument("--steps", type=int, help="New saved step limit")
+    memory_edit.add_argument("--pause-seconds", type=int, help="New saved pause between iterations")
+    memory_edit.add_argument(
+        "--no-pre-prompt",
+        action="store_true",
+        help="Disable the configured pre-prompt",
+    )
+    memory_edit.add_argument(
+        "--no-agent-file",
+        action="store_true",
+        help="Do not attach AGENTS.md / instruction file contents",
+    )
+    memory_edit.add_argument("--agent-file", help="Override the AGENTS.md / instruction file path")
+    memory_edit.add_argument("--task-file", help="New saved task file path")
+    memory_edit.add_argument(
+        "--until-tasks-complete",
+        action="store_true",
+        help="Stop when To do and Doing are empty in the task file",
+    )
+    memory_edit.add_argument(
+        "--label",
+        action="append",
+        default=None,
+        help="Replace labels with repeated values",
+    )
+    memory_edit.add_argument(
+        "--favorite",
+        dest="favorite",
+        action="store_true",
+        help="Mark as favorite",
+    )
+    memory_edit.add_argument(
+        "--no-favorite",
+        dest="favorite",
+        action="store_false",
+        help="Remove favorite mark",
+    )
+    memory_edit.set_defaults(favorite=None)
+    memory_edit.add_argument("--change-note", help="Short note for the new version snapshot")
+
+    memory_favorite = memory_subparsers.add_parser(
+        "favorite",
+        help="Mark or unmark favorite",
+        description="Toggle the favorite state for a memory entry.",
+    )
+    memory_favorite.add_argument("entry_id", help="Saved memory entry id")
+    memory_favorite.add_argument("--off", action="store_true", help="Remove favorite mark")
+
+    memory_delete = memory_subparsers.add_parser(
+        "delete",
+        help="Delete a memory entry",
+        description="Delete a saved preset or history entry.",
+    )
+    memory_delete.add_argument("entry_id", help="Saved memory entry id")
 
     pause_parser = subparsers.add_parser(
         "pause",
@@ -362,6 +511,22 @@ def normalize_global_args(argv: list[str]) -> list[str]:
     return pair + items
 
 
+def _resolve_memory_run_config(args: argparse.Namespace, app_config) -> object:
+    return resolve_run_config(
+        app_config,
+        prompt=args.prompt,
+        runner=args.runner,
+        agent=args.agent,
+        steps=args.steps,
+        pause_seconds=args.pause_seconds,
+        pre_prompt_enabled=False if getattr(args, "no_pre_prompt", False) else None,
+        attach_agent_file=False if getattr(args, "no_agent_file", False) else None,
+        agent_file=args.agent_file,
+        task_file=args.task_file,
+        stop_when_tasks_complete=True if getattr(args, "until_tasks_complete", False) else None,
+    )
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args(normalize_global_args(sys.argv[1:]))
@@ -414,21 +579,96 @@ def main() -> None:
             Path(app_config.paths.state_dir),
             emit_output=not (args.quiet or args.json),
         )
+        memory = MemoryStore(Path(app_config.paths.state_dir))
+
+        if args.command == "memory":
+            if args.memory_command == "save":
+                run_config = _resolve_memory_run_config(args, app_config)
+                entry = memory.create(
+                    kind=args.kind,
+                    title=args.title,
+                    run_config=run_config,
+                    folder=Path.cwd(),
+                    labels=args.label,
+                    favorite=args.favorite,
+                    source_command="memory save",
+                )
+                if args.json:
+                    print_json(entry.to_dict())
+                elif not args.quiet:
+                    print(render_memory_show(entry))
+                return
+
+            if args.memory_command == "list":
+                entries = memory.list_entries(
+                    kind=None if args.kind == "all" else args.kind,
+                    favorites_only=args.favorites,
+                    all_folders=args.all_folders,
+                    folder=Path.cwd(),
+                )
+                if args.json:
+                    print_json([entry.to_dict() for entry in entries])
+                elif not args.quiet:
+                    print(render_memory_list(entries))
+                return
+
+            if args.memory_command == "show":
+                entry = memory.load(args.entry_id, folder=Path.cwd())
+                if args.json:
+                    print_json(entry.to_dict())
+                elif not args.quiet:
+                    print(render_memory_show(entry))
+                return
+
+            if args.memory_command == "edit":
+                updates_requested = any(
+                    value is not None
+                    for value in (
+                        args.prompt,
+                        args.runner,
+                        args.agent,
+                        args.steps,
+                        args.pause_seconds,
+                        args.agent_file,
+                        args.task_file,
+                    )
+                ) or args.no_pre_prompt or args.no_agent_file or args.until_tasks_complete
+                run_config = (
+                    _resolve_memory_run_config(args, app_config) if updates_requested else None
+                )
+                entry = memory.edit(
+                    args.entry_id,
+                    run_config=run_config,
+                    title=args.title,
+                    labels=args.label,
+                    favorite=args.favorite,
+                    change_note=args.change_note,
+                    folder=Path.cwd(),
+                )
+                if args.json:
+                    print_json(entry.to_dict())
+                elif not args.quiet:
+                    print(render_memory_show(entry))
+                return
+
+            if args.memory_command == "favorite":
+                entry = memory.edit(args.entry_id, favorite=not args.off, folder=Path.cwd())
+                if args.json:
+                    print_json(entry.to_dict())
+                elif not args.quiet:
+                    print(render_memory_show(entry))
+                return
+
+            if args.memory_command == "delete":
+                memory.delete(args.entry_id, folder=Path.cwd())
+                if args.json:
+                    print_json({"ok": True, "deleted": args.entry_id})
+                elif not args.quiet:
+                    print(f"Deleted memory entry: {args.entry_id}")
+                return
 
         if args.command == "run":
-            run_config = resolve_run_config(
-                app_config,
-                prompt=args.prompt,
-                runner=args.runner,
-                agent=args.agent,
-                steps=args.steps,
-                pause_seconds=args.pause_seconds,
-                pre_prompt_enabled=False if args.no_pre_prompt else None,
-                attach_agent_file=False if args.no_agent_file else None,
-                agent_file=args.agent_file,
-                task_file=args.task_file,
-                stop_when_tasks_complete=True if args.until_tasks_complete else None,
-            )
+            run_config = _resolve_memory_run_config(args, app_config)
             state = service.create_loop(run_config, loop_id=args.loop_id)
             if not args.quiet and not args.json:
                 print(f"Loop ID: {state.loop_id}")
@@ -441,6 +681,20 @@ def main() -> None:
 
         if args.command == "resume":
             final_state = service.run_loop(args.loop_id)
+            if args.json:
+                print_json(final_state.to_dict())
+            elif not args.quiet:
+                print(render_status(final_state))
+            return
+
+        if args.command == "replay":
+            entry = memory.load(args.entry_id, folder=Path.cwd())
+            run_config = run_config_from_entry(entry, app_config)
+            state = service.create_loop(run_config, loop_id=args.loop_id)
+            if not args.quiet and not args.json:
+                print(f"Loop ID: {state.loop_id}")
+            final_state = service.run_loop(state.loop_id)
+            memory.mark_used(args.entry_id, folder=Path.cwd())
             if args.json:
                 print_json(final_state.to_dict())
             elif not args.quiet:

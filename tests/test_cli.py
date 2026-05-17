@@ -4,7 +4,40 @@ import json
 from pathlib import Path
 
 from ailoop.cli import main
+from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig, LoopState
+
+
+def write_test_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        f"""
+default_runner: test
+default_agent: orchestrator
+paths:
+  agent_file: null
+  state_dir: {tmp_path / 'state'}
+prompt:
+  pre_prompt_enabled: false
+  attach_agent_file: false
+  pre_prompt: ""
+loop:
+  steps: null
+  pause_seconds: 0
+  continue_on_error: true
+  retry_count: 0
+tasks:
+  file: null
+  stop_when_complete: false
+  max_doing: 1
+runners:
+  test:
+    command: python3
+    args: ["-c", "print('ok')"]
+    env: {{}}
+""".strip()
+    )
+    return config_path
 
 
 def test_task_template_command_prints_template(capsys, monkeypatch) -> None:
@@ -34,6 +67,281 @@ def test_init_task_file_and_check_task_file(capsys, monkeypatch, tmp_path: Path)
     main()
     out = capsys.readouterr().out
     assert "⏳ open" in out
+
+
+def test_memory_save_list_show_and_edit(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Quick review",
+            "Review the repo",
+            "--runner",
+            "test",
+            "--label",
+            "demo",
+            "--favorite",
+        ],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+    assert saved["title"] == "Quick review"
+    assert saved["favorite"] is True
+    entry_id = saved["id"]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "list", "--kind", "preset"],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert len(listed) == 1
+    assert listed[0]["id"] == entry_id
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "edit",
+            entry_id,
+            "--title",
+            "Quick review v2",
+            "--prompt",
+            "Review the repo again",
+            "--label",
+            "updated",
+            "--no-favorite",
+            "--change-note",
+            "refresh",
+        ],
+    )
+    main()
+    edited = json.loads(capsys.readouterr().out)
+    assert edited["title"] == "Quick review v2"
+    assert edited["favorite"] is False
+    assert edited["current"]["prompt"] == "Review the repo again"
+    assert edited["latest_version"] == 2
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "show", entry_id],
+    )
+    main()
+    shown = capsys.readouterr().out
+    assert "Quick review v2" in shown
+    assert "prompt: Review the repo again" in shown
+
+
+def test_memory_favorite_and_delete(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "History entry",
+            "Do a run",
+            "--kind",
+            "history",
+        ],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+    entry_id = saved["id"]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "favorite", entry_id],
+    )
+    main()
+    favorited = json.loads(capsys.readouterr().out)
+    assert favorited["favorite"] is True
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "delete", entry_id],
+    )
+    main()
+    deleted = json.loads(capsys.readouterr().out)
+    assert deleted == {"ok": True, "deleted": entry_id}
+
+    store = MemoryStore(tmp_path / "state")
+    try:
+        store.load(entry_id)
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("entry should be deleted")
+
+
+def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Replay me",
+            "Review the repo",
+            "--runner",
+            "test",
+        ],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+    entry_id = saved["id"]
+
+    seen: dict[str, object] = {}
+
+    def fake_create_loop(self, run_config, loop_id=None):  # type: ignore[no-untyped-def]
+        seen["run_config"] = run_config
+        return LoopState(
+            loop_id=loop_id or "replayed-loop",
+            created_at="now",
+            updated_at="now",
+            status="idle",
+            control="run",
+            run_config=run_config,
+        )
+
+    def fake_run_loop(self, loop_id):  # type: ignore[no-untyped-def]
+        run_config = seen["run_config"]
+        assert isinstance(run_config, LoopRunConfig)
+        return LoopState(
+            loop_id=loop_id,
+            created_at="now",
+            updated_at="now",
+            status="completed",
+            control="run",
+            run_config=run_config,
+        )
+
+    monkeypatch.setattr("ailoop.service.LoopService.create_loop", fake_create_loop)
+    monkeypatch.setattr("ailoop.service.LoopService.run_loop", fake_run_loop)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "replay",
+            entry_id,
+            "--loop-id",
+            "replay-1",
+        ],
+    )
+    main()
+    replayed = json.loads(capsys.readouterr().out)
+    assert replayed["loop_id"] == "replay-1"
+    run_config = seen["run_config"]
+    assert isinstance(run_config, LoopRunConfig)
+    assert run_config.prompt == "Review the repo"
+
+    store = MemoryStore(tmp_path / "state")
+    entry = store.load(entry_id)
+    assert entry.use_count == 1
+
+
+def test_memory_show_rejects_out_of_scope_entry(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    source = tmp_path / "source"
+    other = tmp_path / "other"
+    source.mkdir()
+    other.mkdir()
+
+    monkeypatch.chdir(source)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "save", "Scoped", "Only here"],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+
+    monkeypatch.chdir(other)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "show", saved["id"]],
+    )
+    try:
+        main()
+    except FileNotFoundError as exc:
+        assert saved["id"] in str(exc)
+    else:
+        raise AssertionError("expected out-of-scope lookup to fail")
+
+
+def test_replay_failure_does_not_mark_used(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Replay me",
+            "Review the repo",
+        ],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+    entry_id = saved["id"]
+
+    def fake_create_loop(self, run_config, loop_id=None):  # type: ignore[no-untyped-def]
+        return LoopState(
+            loop_id=loop_id or "replay-fail",
+            created_at="now",
+            updated_at="now",
+            status="idle",
+            control="run",
+            run_config=run_config,
+        )
+
+    def fake_run_loop(self, loop_id):  # type: ignore[no-untyped-def]
+        raise RuntimeError(f"boom: {loop_id}")
+
+    monkeypatch.setattr("ailoop.service.LoopService.create_loop", fake_create_loop)
+    monkeypatch.setattr("ailoop.service.LoopService.run_loop", fake_run_loop)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "replay", entry_id],
+    )
+    try:
+        main()
+    except RuntimeError as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("expected replay failure")
+
+    store = MemoryStore(tmp_path / "state")
+    entry = store.load(entry_id)
+    assert entry.use_count == 0
+
 
 
 def test_check_task_file_verbose(capsys, monkeypatch, tmp_path: Path) -> None:

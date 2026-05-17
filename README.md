@@ -17,7 +17,7 @@
 
 > ## Run AI terminal tools in repeatable loops
 >
-> YAML config, durable state, task-file mode, pause/resume, and stats for OpenCode, Codex, Claude, and more.
+> YAML config, durable state, task-file mode, presets/history, pause/resume, and stats for OpenCode, Codex, Claude, and more.
 >
 > Docs: [GitHub Pages](https://dmoliveira.github.io/ailoop/) · [docs/index.md](docs/index.md)
 >
@@ -40,6 +40,7 @@ Most AI terminal workflows start as a quick `while true` loop, then grow messy f
 - ✅ durable local state
 - ✅ pause / resume / stop controls
 - ✅ strict Markdown task-file mode
+- ✅ saved presets + replayable history
 - ✅ stats, logs, and tail commands
 - ✅ JSON output for automation
 
@@ -90,6 +91,15 @@ ailoop status <loop-id>
 ailoop stats <loop-id>
 ailoop logs <loop-id>
 ailoop --json status <loop-id>
+```
+
+Presets + replay:
+
+```bash
+ailoop memory save "Quick review" "Review the repo." --runner opencode --agent orchestrator
+ailoop memory list
+ailoop memory show <memory-id>
+ailoop replay <memory-id>
 ```
 
 ## Task file mode ✅
@@ -144,6 +154,19 @@ ailoop run "Prompt"
 ailoop resume <loop-id>
 ailoop pause <loop-id>
 ailoop stop <loop-id>
+ailoop replay <memory-id>
+```
+
+Memory:
+
+```bash
+ailoop memory save "Title" "Prompt"
+ailoop memory save "Recent run" "Prompt" --kind history
+ailoop memory list --kind preset
+ailoop memory show <memory-id>
+ailoop memory edit <memory-id> --title "New title"
+ailoop memory favorite <memory-id>
+ailoop memory delete <memory-id>
 ```
 
 Watch + inspect:
