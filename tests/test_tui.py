@@ -428,3 +428,35 @@ def test_memory_favorite_toggles_top_filtered_entry(tmp_path: Path) -> None:
     app.action_memory_favorite()
     updated = memory.load(entry.id, folder=Path.cwd())
     assert updated.favorite is True
+
+
+def test_memory_detail_text_includes_show_and_edit_commands(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Quick review",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    text = app._memory_detail_text()
+    assert f"ailoop memory show {entry.id}" in text
+    assert f"ailoop memory edit {entry.id} --title 'Quick review'" in text
+    assert f"ailoop memory favorite {entry.id}" in text
