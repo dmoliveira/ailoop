@@ -417,6 +417,138 @@ def test_memory_list_filters_by_query(capsys, monkeypatch, tmp_path: Path) -> No
     assert [entry["id"] for entry in listed] == [first["id"]]
 
 
+def test_memory_list_filters_to_favorites_in_current_folder(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    config_path = write_test_config(tmp_path)
+    project_dir = tmp_path / "project"
+    project_dir.mkdir()
+    monkeypatch.chdir(project_dir)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Favorite entry",
+            "Keep for later",
+            "--favorite",
+        ],
+    )
+    main()
+    favorite = json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Regular entry",
+            "Something else",
+        ],
+    )
+    main()
+    json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "list",
+            "--favorites",
+        ],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in listed] == [favorite["id"]]
+
+
+def test_memory_list_all_folders_expands_scope(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    first_dir = tmp_path / "project-one"
+    second_dir = tmp_path / "project-two"
+    first_dir.mkdir()
+    second_dir.mkdir()
+
+    monkeypatch.chdir(first_dir)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "First entry",
+            "Keep for later",
+        ],
+    )
+    main()
+    first = json.loads(capsys.readouterr().out)
+
+    monkeypatch.chdir(second_dir)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Second entry",
+            "Something else",
+        ],
+    )
+    main()
+    second = json.loads(capsys.readouterr().out)
+
+    monkeypatch.chdir(first_dir)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "list",
+        ],
+    )
+    main()
+    local_only = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in local_only] == [first["id"]]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "list",
+            "--all-folders",
+        ],
+    )
+    main()
+    expanded = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in expanded] == [second["id"], first["id"]]
+
+
 def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 
