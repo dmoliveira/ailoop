@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig
 from ailoop.service import LoopService
 from ailoop.tui import LoopDashboard, launch_in_tmux, tail_text
@@ -198,3 +199,71 @@ def test_summary_counts_reflect_state_buckets(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
     assert app._summary_counts() == (2, 2, 1)
+
+
+def test_memory_log_text_lists_entries_with_kind_and_favorite(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Quick review",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    text = app._memory_log_text()
+    assert "Quick review" in text
+    assert "preset" in text
+    assert "★" in text
+
+
+def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="One",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    memory.create(
+        kind="history",
+        title="Two",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    assert app._memory_log_meta() == "source memory · entries 2 · favorites 1 · scope cwd"
