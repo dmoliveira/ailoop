@@ -1,6 +1,8 @@
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig
 from ailoop.service import LoopService
@@ -583,3 +585,83 @@ def test_memory_detail_text_includes_show_and_edit_commands(tmp_path: Path) -> N
     assert f"ailoop memory show {entry.id}" in text
     assert f"ailoop memory edit {entry.id} --title 'Quick review'" in text
     assert f"ailoop memory favorite {entry.id}" in text
+
+
+def test_memory_delete_requires_confirmation(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Delete me",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app.action_memory_delete()
+    assert app.memory_delete_armed is True
+    assert memory.load(entry.id, folder=Path.cwd()).id == entry.id
+
+
+def test_memory_delete_removes_selected_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    first = memory.create(
+        kind="preset",
+        title="First",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    second = memory.create(
+        kind="preset",
+        title="Second",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    app.action_memory_next()
+    app.action_memory_delete()
+    app.action_memory_delete()
+    with pytest.raises(FileNotFoundError):
+        memory.load(first.id, folder=Path.cwd())
+    assert memory.load(second.id, folder=Path.cwd()).id == second.id

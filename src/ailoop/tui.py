@@ -171,6 +171,7 @@ class LoopDashboard(App[None]):
         ("7", "set_log_memory_history", "History"),
         ("8", "memory_replay", "Replay Memory"),
         ("9", "memory_favorite", "Toggle Favorite"),
+        ("x", "memory_delete", "Delete Memory"),
         ("[", "memory_prev", "Prev Memory"),
         ("]", "memory_next", "Next Memory"),
         ("a", "filter_active", "Active"),
@@ -183,6 +184,7 @@ class LoopDashboard(App[None]):
     log_kind: reactive[LogKind] = reactive("stdout")
     memory_filter: reactive[MemoryFilter] = reactive("all")
     memory_index: reactive[int] = reactive(0)
+    memory_delete_armed: reactive[bool] = reactive(False)
     delete_armed: reactive[bool] = reactive(False)
 
     def _summary_counts(self) -> tuple[int, int, int]:
@@ -231,6 +233,7 @@ class LoopDashboard(App[None]):
                     yield Button("7 history", id="log-memory-history")
                     yield Button("8 replay", id="memory-replay")
                     yield Button("9 favorite", id="memory-favorite")
+                    yield Button("x delete", id="memory-delete")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -293,6 +296,12 @@ class LoopDashboard(App[None]):
         self.query_one("#memory-favorite", Button).disabled = not (
             self.log_kind == "memory" and memory_entry is not None
         )
+        self.query_one("#memory-delete", Button).disabled = not (
+            self.log_kind == "memory" and memory_entry is not None
+        )
+        self.query_one("#memory-delete", Button).label = (
+            "x confirm" if self.memory_delete_armed else "x delete"
+        )
         self.query_one("#remove", Button).label = "✖ Confirm" if self.delete_armed else "✖ Delete"
         self._render_help_bar(state)
 
@@ -305,7 +314,9 @@ class LoopDashboard(App[None]):
         if self.log_kind == "memory":
             memory_actions = []
             if self._primary_memory_entry() is not None:
-                memory_actions.extend(["[ prev", "] next", "8 replay", "9 favorite"])
+                memory_actions.extend(["[ prev", "] next", "8 replay", "9 favorite", "x delete"])
+            if self.memory_delete_armed:
+                memory_actions.append("x confirm")
             action_text = " · ".join(memory_actions) if memory_actions else "read only"
             bar.update(f"{base} · memory {self.memory_filter} · actions {action_text}")
             return
@@ -470,6 +481,7 @@ class LoopDashboard(App[None]):
                 "] next entry",
                 "8 replay top entry",
                 "9 toggle favorite",
+                "x delete selected entry",
             ]
         )
 
@@ -641,6 +653,8 @@ class LoopDashboard(App[None]):
             self.action_memory_replay()
         elif button_id == "memory-favorite":
             self.action_memory_favorite()
+        elif button_id == "memory-delete":
+            self.action_memory_delete()
         elif button_id and button_id.startswith("log-"):
             self.log_kind = button_id.removeprefix("log-")  # type: ignore[assignment]
             self._sync_button_state()
@@ -722,6 +736,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "all"
         self.memory_index = 0
+        self.memory_delete_armed = False
         self._sync_button_state()
         self._render_selected()
 
@@ -729,6 +744,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "favorites"
         self.memory_index = 0
+        self.memory_delete_armed = False
         self._sync_button_state()
         self._render_selected()
 
@@ -736,6 +752,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "history"
         self.memory_index = 0
+        self.memory_delete_armed = False
         self._sync_button_state()
         self._render_selected()
 
@@ -748,11 +765,13 @@ class LoopDashboard(App[None]):
 
     def action_memory_prev(self) -> None:
         self._move_memory_selection(-1)
+        self.memory_delete_armed = False
         self._sync_button_state()
         self._render_selected()
 
     def action_memory_next(self) -> None:
         self._move_memory_selection(1)
+        self.memory_delete_armed = False
         self._sync_button_state()
         self._render_selected()
 
@@ -760,6 +779,7 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return
+        self.memory_delete_armed = False
         self._spawn_replay(entry.id)
         self.notify(f"replay sent: {entry.id}")
         self.refresh_data()
@@ -768,9 +788,25 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return
+        self.memory_delete_armed = False
         updated = self.memory.edit(entry.id, favorite=not entry.favorite, folder=Path.cwd())
         state = "favorite on" if updated.favorite else "favorite off"
         self.notify(f"{state}: {updated.id}")
+        self.refresh_data()
+
+    def action_memory_delete(self) -> None:
+        entry = self._primary_memory_entry()
+        if entry is None:
+            return
+        if not self.memory_delete_armed:
+            self.memory_delete_armed = True
+            self.notify(f"press x again to delete memory: {entry.id}")
+            self._sync_button_state()
+            return
+        self.memory.delete(entry.id, folder=Path.cwd())
+        self.memory_delete_armed = False
+        self.memory_index = 0
+        self.notify(f"memory deleted: {entry.id}")
         self.refresh_data()
 
     def action_pause_selected(self) -> None:
