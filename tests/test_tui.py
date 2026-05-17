@@ -299,11 +299,12 @@ def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_pat
         run_config=run_config,
         folder=Path.cwd(),
         favorite=True,
+        labels=["ops"],
     )
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.log_kind = "memory"
-    assert app._summary_selected_text(None) == f"memory all · selected {entry.id}"
+    assert app._summary_selected_text(None) == f"memory all · labels 1 · selected {entry.id}"
 
 
 def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> None:
@@ -334,7 +335,7 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._summary_bar_text(0, 0, 0, 0, 0, None)
-    assert f"memory all · selected {entry.id}" in text
+    assert f"memory all · labels 0 · selected {entry.id}" in text
     assert "log memory" not in text
 
 
@@ -367,6 +368,8 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.log_kind = "memory"
     text = app._memory_help_text()
     assert "memory all" in text
+    assert "entries 1" in text
+    assert "labels 0" in text
     assert "8 replay" in text
     assert "no loop selected" not in text
 
