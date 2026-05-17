@@ -23,6 +23,8 @@ class LoopService:
 
     def create_loop(self, run_config: LoopRunConfig, loop_id: str | None = None) -> LoopState:
         resolved_loop_id = loop_id or uuid.uuid4().hex[:12]
+        if raw_loop_dir(self.state_root, resolved_loop_id).exists():
+            raise RuntimeError(f"Loop already exists: {resolved_loop_id}")
         state = LoopState(
             loop_id=resolved_loop_id,
             created_at=utc_now(),

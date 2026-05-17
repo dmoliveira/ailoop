@@ -82,6 +82,28 @@ def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
     assert {state.loop_id for state in states} == {"loop-a", "loop-b"}
 
 
+def test_create_loop_rejects_duplicate_loop_id(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    service.create_loop(run_config, loop_id="duplicate")
+    with pytest.raises(RuntimeError, match="Loop already exists: duplicate"):
+        service.create_loop(run_config, loop_id="duplicate")
+
+
 def test_missing_runner_marks_failure_cleanly(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
