@@ -6,13 +6,19 @@ import pytest
 from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig
 from ailoop.service import LoopService
-from ailoop.tui import LoopDashboard, launch_in_tmux, tail_text
+from ailoop.tui import LoopDashboard, launch_in_tmux, render_progress_text, tail_text
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
     path = tmp_path / "out.log"
     path.write_text("a\nb\nc\n")
     assert tail_text(path, lines=2) == "b\nc"
+
+
+def test_render_progress_text_uses_bar_for_finite_targets() -> None:
+    assert render_progress_text(1, 5) == "█░░░ 1/5"
+    assert render_progress_text(5, 5) == "████ 5/5"
+    assert render_progress_text(2, None) == "∞ 2"
 
 
 def test_tui_mounts_and_loads_loop(tmp_path: Path) -> None:
@@ -339,9 +345,7 @@ def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_pat
     text = app._memory_detail_text()
     assert "active label: ops" in text
     assert "available labels: 1" in text
-    assert "b previous label" in text
-    assert "n next label" in text
-    assert "c clear label" in text
+    assert "labels: b n c" in text
 
 
 def test_summary_selected_text_compacts_in_memory_mode_at_80_columns(tmp_path: Path) -> None:
@@ -871,9 +875,7 @@ def test_memory_detail_text_lists_query_controls(tmp_path: Path) -> None:
     app.log_kind = "memory"
     text = app._memory_detail_text()
     assert "scope: cwd" in text
-    assert "o toggle scope" in text
-    assert "/ focus query" in text
-    assert "esc clear query" in text
+    assert "scope/query: o / esc" in text
 
 
 def test_memory_scope_toggle_shows_entries_from_other_folders(tmp_path: Path) -> None:

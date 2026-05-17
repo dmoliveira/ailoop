@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from textual import on
+from textual import events, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
@@ -23,6 +23,7 @@ MemoryFilter = Literal["all", "favorites", "history", "archived", "presets"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
+COMPACT_LAYOUT_WIDTH = 100
 
 
 def launch_in_tmux(config_path: Path, loop_id: str | None = None) -> None:
@@ -66,6 +67,15 @@ def short_loop_id(loop_id: str) -> str:
     return loop_id if len(loop_id) <= 12 else loop_id[:12]
 
 
+def render_progress_text(completed: int, target: int | None, width: int = 4) -> str:
+    if target is None or target <= 0:
+        return f"∞ {completed}"
+    ratio = min(max(completed / target, 0), 1)
+    filled = min(width, max(0, round(ratio * width)))
+    bar = "█" * filled + "░" * (width - filled)
+    return f"{bar} {completed}/{target}"
+
+
 class LoopDashboard(App[None]):
     CSS = """
     Screen {
@@ -75,33 +85,51 @@ class LoopDashboard(App[None]):
 
     #main {
         height: 1fr;
+        padding: 0 1 1 1;
+    }
+
+    .compact-layout #sidebar {
+        width: 28;
+        min-width: 24;
+    }
+
+    .compact-layout #details {
+        display: none;
+    }
+
+    .compact-layout #content {
+        padding: 0;
     }
 
     #summary_bar {
         height: auto;
-        padding: 0 1 1 1;
-        color: #cbd5e1;
+        padding: 0 2 1 2;
+        color: #dbe7f4;
+        background: #07101c;
+        text-style: bold;
     }
 
     #sidebar {
-        width: 38;
-        min-width: 30;
-        border: round #243244;
-        padding: 1;
-        background: #0b1220;
+        width: 30;
+        min-width: 28;
+        border: round #1f4f91;
+        padding: 1 1 0 1;
+        margin-right: 1;
+        background: #0a1322;
     }
 
     #content {
         width: 1fr;
-        padding: 0 1;
+        padding: 0 1 0 0;
     }
 
     #details {
-        width: 42;
-        min-width: 32;
-        border: round #243244;
-        padding: 1;
-        background: #0b1220;
+        width: 34;
+        min-width: 30;
+        border: round #1f4f91;
+        padding: 1 1 0 1;
+        margin-left: 1;
+        background: #0a1322;
     }
 
     #loops {
@@ -111,7 +139,7 @@ class LoopDashboard(App[None]):
 
     .panel-title {
         text-style: bold;
-        color: #38bdf8;
+        color: #4ea3ff;
         margin-bottom: 1;
     }
 
@@ -123,35 +151,91 @@ class LoopDashboard(App[None]):
     .toolbar Button {
         margin-right: 1;
         margin-bottom: 1;
+        background: #0e1728;
+        color: #dbe7f4;
+        border: round #2b3b52;
+        text-style: bold;
+        padding: 0 1;
     }
 
     .toolbar Button.active {
-        background: #1d4ed8;
+        background: #123a82;
         color: #f8fafc;
         text-style: bold;
-        border: round #38bdf8;
+        border: round #4ea3ff;
+    }
+
+    .primary-toolbar Button {
+        background: #101b2e;
+        border: round #355070;
+    }
+
+    .log-toolbar Button {
+        background: #0d1829;
+        border: round #2d4666;
+    }
+
+    .memory-filter-toolbar Button {
+        background: #101a2b;
+        border: round #2d4666;
+    }
+
+    .primary-toolbar #refresh {
+        background: #123a82;
+        border: round #4ea3ff;
+    }
+
+    .primary-toolbar #stop,
+    .primary-toolbar #remove,
+    .memory-toolbar #memory-delete {
+        background: #2a1219;
+        border: round #7f1d1d;
+    }
+
+    .memory-toolbar {
+        margin-bottom: 0;
+    }
+
+    .memory-action-toolbar Button {
+        background: #0f1726;
+        border: round #36506f;
+    }
+
+    #memory-query {
+        margin: 0 0 1 0;
+        border: round #2b3b52;
+        background: #0c1626;
+        color: #dbe7f4;
+    }
+
+    #summary_bar,
+    #help_bar,
+    #log_meta {
+        link-style: bold;
     }
 
     #log_view {
-        border: round #243244;
+        border: round #2b3b52;
         height: 1fr;
-        padding: 1;
-        background: #0b1220;
+        padding: 1 1 0 1;
+        background: #091322;
     }
 
     #log_meta {
-        color: #94a3b8;
+        color: #8ea3bf;
         margin-bottom: 1;
     }
 
     #detail_view {
         height: 1fr;
+        padding: 0 0 1 0;
     }
 
     #help_bar {
         height: auto;
-        color: #94a3b8;
-        padding: 0 1 1 1;
+        color: #8ea3bf;
+        padding: 0 2 1 2;
+        background: #07101c;
     }
     """
 
@@ -224,29 +308,31 @@ class LoopDashboard(App[None]):
         yield Static("loading...", id="summary_bar")
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
-                yield Static("🔁 loops", classes="panel-title")
-                with Horizontal(classes="toolbar"):
+                yield Static("LOOPS", classes="panel-title")
+                with Horizontal(classes="toolbar primary-toolbar"):
                     yield Button("g running", id="filter-running")
                     yield Button("a active", id="filter-active")
                     yield Button("l all", id="filter-all")
                 yield DataTable(id="loops", zebra_stripes=True)
             with Vertical(id="content"):
-                with Horizontal(classes="toolbar"):
+                with Horizontal(classes="toolbar primary-toolbar"):
                     yield Button("⟳ Refresh", id="refresh")
                     yield Button("⏸ Pause", id="pause")
                     yield Button("▶ Resume", id="resume")
                     yield Button("⏹ Stop", id="stop")
                     yield Button("✖ Delete", id="remove")
-                with Horizontal(classes="toolbar"):
+                with Horizontal(classes="toolbar log-toolbar"):
                     yield Button("1 stdout", id="log-stdout")
                     yield Button("2 stderr", id="log-stderr")
                     yield Button("3 prompt", id="log-prompt")
                     yield Button("4 events", id="log-events")
+                with Horizontal(classes="toolbar memory-filter-toolbar"):
                     yield Button("5 memory", id="log-memory")
                     yield Button("6 favorites", id="log-memory-favorites")
                     yield Button("7 history", id="log-memory-history")
                     yield Button("m presets", id="log-memory-presets")
                     yield Button("0 archived", id="log-memory-archived")
+                with Horizontal(classes="toolbar memory-action-toolbar"):
                     yield Button("b label<", id="memory-label-prev")
                     yield Button("n label>", id="memory-label-next")
                     yield Button("c labelx", id="memory-label-clear")
@@ -260,24 +346,33 @@ class LoopDashboard(App[None]):
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
-                yield Static("ℹ details", classes="panel-title")
+                yield Static("DETAILS", classes="panel-title")
                 yield Static(id="detail_view")
         yield Static("loading...", id="help_bar")
 
     def on_mount(self) -> None:
+        self._sync_layout_mode()
         table = self.query_one(DataTable)
-        table.add_columns("Loop", "State", "Prog", "Agent", "Fail")
+        table.add_columns("Loop", "Status", "Progress", "Agent", "Fails")
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._sync_layout_mode(event.size.width)
+
+    def _sync_layout_mode(self, width: int | None = None) -> None:
+        actual_width = self.size.width if width is None else width
+        self.set_class(actual_width <= COMPACT_LAYOUT_WIDTH, "compact-layout")
 
     def _render_summary_bar(self) -> None:
         if not self.is_mounted:
             return
-        total = len(self.service.list_loops())
-        active = sum(1 for state in self.service.list_loops() if state.status in ACTIVE_STATUSES)
-        running = sum(1 for state in self.service.list_loops() if state.status in RUNNING_STATUSES)
-        paused = sum(1 for state in self.service.list_loops() if state.status == "paused")
-        failed = sum(1 for state in self.service.list_loops() if state.status == "failed")
+        states = self.service.list_loops()
+        total = len(states)
+        active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
+        running = sum(1 for state in states if state.status in RUNNING_STATUSES)
+        paused = sum(1 for state in states if state.status == "paused")
+        failed = sum(1 for state in states if state.status == "failed")
         selected = self._selected_state()
         summary_text = self._summary_bar_text(
             total,
@@ -304,7 +399,7 @@ class LoopDashboard(App[None]):
         width: int | None = None,
     ) -> str:
         actual_width = width or 0
-        compact = bool(actual_width and actual_width <= 80)
+        compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         selected_text = self._summary_selected_text(state, width=actual_width)
         if compact:
             base = f"all {total} · act {active} · run {running} · pause {paused} · fail {failed}"
@@ -323,7 +418,7 @@ class LoopDashboard(App[None]):
 
     def _summary_selected_text(self, state: object | None, width: int | None = None) -> str:
         actual_width = width or 0
-        compact = bool(actual_width and actual_width <= 80)
+        compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         if self.log_kind == "memory":
             entry = self._primary_memory_entry()
             label_count = len(self._memory_labels())
@@ -348,13 +443,13 @@ class LoopDashboard(App[None]):
 
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
-        if actual_width and actual_width <= 80:
+        if actual_width and actual_width <= COMPACT_LAYOUT_WIDTH:
             return "↑↓ g/a/l 1-7/m/0 r q"
         return "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
 
     def _memory_help_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
-        compact = bool(actual_width and actual_width <= 80)
+        compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         memory_actions = []
         label_count = len(self._memory_labels())
         if self._primary_memory_entry() is not None:
@@ -696,9 +791,9 @@ class LoopDashboard(App[None]):
         )
         return "\n".join(
             [
-                f"memory {entry.id}",
+                f"MEMORY {entry.id}",
                 "",
-                "summary",
+                "OVERVIEW",
                 f"title: {entry.title}",
                 f"kind: {entry.kind}",
                 f"favorite: {entry.favorite}",
@@ -709,36 +804,27 @@ class LoopDashboard(App[None]):
                 f"query: {self.memory_query or '-'}",
                 f"available labels: {len(self._memory_labels())}",
                 "",
-                "usage",
-                f"used: {entry.use_count}",
-                f"last used: {entry.last_used_at or '-'}",
-                f"versions: {entry.latest_version}",
-                "",
-                "run",
+                "RUN CONFIG",
                 f"runner: {entry.current.runner}",
                 f"agent: {entry.current.agent or '-'}",
                 f"steps: {entry.current.steps}",
                 "",
-                "commands",
-                show_command,
-                edit_command,
-                favorite_command,
-                archive_command,
+                "USAGE",
+                f"used: {entry.use_count}",
+                f"last used: {entry.last_used_at or '-'}",
+                f"versions: {entry.latest_version}",
                 "",
-                "actions",
-                "[ previous entry",
-                "] next entry",
-                "b previous label",
-                "n next label",
-                "c clear label",
-                "o toggle scope",
-                "/ focus query",
-                "esc clear query",
-                "8 replay top entry",
-                "9 toggle favorite",
-                "v restore selected entry",
-                "z archive selected entry",
-                "x delete selected entry",
+                "COMMANDS",
+                f"show: {show_command}",
+                f"edit: {edit_command}",
+                f"favorite: {favorite_command}",
+                f"archive: {archive_command}",
+                "",
+                "SHORTCUTS",
+                "browse: [ ]",
+                "labels: b n c",
+                "scope/query: o / esc",
+                "actions: 8 9 v z x",
             ]
         )
 
@@ -766,11 +852,7 @@ class LoopDashboard(App[None]):
 
         for state in states:
             target = state.run_config.steps
-            progress = (
-                f"{state.completed_iterations}/∞"
-                if target is None
-                else f"{state.completed_iterations}/{target}"
-            )
+            progress = render_progress_text(state.completed_iterations, target)
             icon = STATUS_ICONS.get(state.status, "•")
             table.add_row(
                 short_loop_id(state.loop_id),
@@ -817,35 +899,29 @@ class LoopDashboard(App[None]):
 
         target = state.run_config.steps
         progress = (
-            f"{state.completed_iterations}/∞"
-            if target is None
-            else f"{state.completed_iterations}/{target}"
+            render_progress_text(state.completed_iterations, target, width=5)
         )
         lines = [
-            f"{STATUS_ICONS.get(state.status, '•')} {state.loop_id}",
+            f"RUN {state.loop_id}",
             "",
-            "summary",
+            "OVERVIEW",
             f"status: {short_status(state.status)}",
-            f"runner: {state.run_config.runner}",
             f"progress: {progress}",
+            f"runner: {state.run_config.runner}",
+            f"agent: {state.run_config.agent or '-'}",
             f"last: {state.last_summary or '-'}",
             "",
-            "status",
-            f"progress: {progress}",
+            "CONTROL",
+            f"control: {state.control}",
             f"exit: {state.last_exit_code}",
             f"failures: {state.consecutive_failures}",
             "",
-            "run",
-            f"runner: {state.run_config.runner}",
-            f"agent: {state.run_config.agent or '-'}",
-            f"control: {state.control}",
-            "",
-            "timing",
+            "TIMING",
             f"avg: {state.average_duration_seconds:.2f}s",
             f"total: {state.total_duration_seconds:.2f}s",
             "",
-            "note",
-            f"last: {state.last_summary or '-'}",
+            "NOTES",
+            f"summary: {state.last_summary or '-'}",
         ]
         if state.run_config.task_file:
             try:
@@ -856,7 +932,7 @@ class LoopDashboard(App[None]):
                 lines.extend(
                     [
                         "",
-                        "task file",
+                        "TASK FILE",
                         f"task file: {state.run_config.task_file}",
                         (
                             f"tasks: to do {len(task_state.todo)} · doing "
