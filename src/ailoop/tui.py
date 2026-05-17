@@ -309,7 +309,15 @@ class LoopDashboard(App[None]):
             return "selected none"
         return f"selected {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
 
-    def _memory_help_text(self) -> str:
+    def _footer_base_text(self, width: int | None = None) -> str:
+        actual_width = self.size.width if width is None else width
+        if actual_width and actual_width <= 80:
+            return "nav ↑↓ · g/a/l · logs 1/2/3/4/5/6/7/m/0 · r · q"
+        return "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
+
+    def _memory_help_text(self, width: int | None = None) -> str:
+        actual_width = self.size.width if width is None else width
+        compact = bool(actual_width and actual_width <= 80)
         memory_actions = []
         label_count = len(self._memory_labels())
         if self._primary_memory_entry() is not None:
@@ -335,10 +343,21 @@ class LoopDashboard(App[None]):
             memory_actions.append("z confirm")
         if self.memory_delete_armed:
             memory_actions.append("x confirm")
-        action_text = " · ".join(memory_actions) if memory_actions else "read only"
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
+        if compact:
+            action_text = (
+                " ".join(token.split()[0] for token in memory_actions) if memory_actions else "ro"
+            )
+        else:
+            action_text = " · ".join(memory_actions) if memory_actions else "read only"
+        base = self._footer_base_text(width=actual_width)
         entries = len(self._memory_entries())
         labels = len(self._memory_labels())
+        if compact:
+            return (
+                f"{base} · mem {self.memory_filter} · lbl {self.memory_label or '-'} · "
+                f"q {self.memory_query or '-'} · {self._memory_scope_text()} · "
+                f"{entries} ent · {labels}/{label_count} lab · {action_text}"
+            )
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
             f"query {self.memory_query or '-'} · "
@@ -401,7 +420,7 @@ class LoopDashboard(App[None]):
 
     def _render_help_bar(self, state: object | None) -> None:
         bar = self.query_one("#help_bar", Static)
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
+        base = self._footer_base_text()
         if self.log_kind == "memory":
             bar.update(self._memory_help_text())
             return
