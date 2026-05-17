@@ -182,6 +182,15 @@ ailoop logs <loop-id>
 ailoop tail <loop-id>
 ```
 
+TUI memory view:
+
+```text
+Inside `ailoop tui`:
+- press `5` or `m` to open the memory view for the selected loop
+- copy the suggested `ailoop memory save ...` command
+- use `ailoop replay <memory-id>` later to start a new loop from that saved entry
+```
+
 Task files:
 
 ```bash
