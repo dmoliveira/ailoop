@@ -272,7 +272,7 @@ def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> No
     app.memory = memory
     assert (
         app._memory_log_meta()
-        == "source memory · filter all · label - · selected 1/2 · favorites 1 · scope cwd"
+        == "source memory · filter all · label - · query - · selected 1/2 · favorites 1 · scope cwd"
     )
 
 
@@ -549,6 +549,45 @@ def test_memory_log_text_filters_to_selected_label(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.memory_label = "ops"
+    text = app._memory_log_text()
+    assert "Ops entry" in text
+    assert "Docs entry" not in text
+
+
+def test_memory_log_text_filters_to_query(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Ops entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["ops", "nightly"],
+    )
+    memory.create(
+        kind="preset",
+        title="Docs entry",
+        run_config=run_config,
+        folder=Path.cwd(),
+        labels=["docs"],
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.memory_query = "night"
     text = app._memory_log_text()
     assert "Ops entry" in text
     assert "Docs entry" not in text

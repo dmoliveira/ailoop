@@ -10,7 +10,7 @@ from textual import on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Button, DataTable, Header, Static
+from textual.widgets import Button, DataTable, Header, Input, Static
 
 from .memory import MemoryStore
 from .service import LoopService
@@ -191,6 +191,7 @@ class LoopDashboard(App[None]):
     log_kind: reactive[LogKind] = reactive("stdout")
     memory_filter: reactive[MemoryFilter] = reactive("all")
     memory_label: reactive[str | None] = reactive(None)
+    memory_query: reactive[str] = reactive("")
     memory_index: reactive[int] = reactive(0)
     memory_archive_armed: reactive[bool] = reactive(False)
     memory_delete_armed: reactive[bool] = reactive(False)
@@ -250,6 +251,7 @@ class LoopDashboard(App[None]):
                     yield Button("v restore", id="memory-restore")
                     yield Button("z archive", id="memory-archive")
                     yield Button("x delete", id="memory-delete")
+                yield Input(placeholder="memory query", id="memory-query")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -331,7 +333,8 @@ class LoopDashboard(App[None]):
         labels = len(self._memory_labels())
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
-            f"entries {entries} · labels {labels}/{label_count} · "
+            f"query {self.memory_query or '-'} · entries {entries} · "
+            f"labels {labels}/{label_count} · "
             f"actions {action_text}"
         )
 
@@ -462,6 +465,13 @@ class LoopDashboard(App[None]):
         entries = self._memory_entries_base()
         if self.memory_label is not None:
             entries = [entry for entry in entries if self.memory_label in entry.labels]
+        if self.memory_query:
+            query = self.memory_query.lower()
+            entries = [
+                entry
+                for entry in entries
+                if query in " ".join([entry.id, entry.title, *entry.labels]).lower()
+            ]
         return entries
 
     def _memory_entries_base(self):
@@ -500,6 +510,7 @@ class LoopDashboard(App[None]):
         selected = self._selected_memory_index() + 1 if entries else 0
         return (
             f"source memory · filter {self.memory_filter} · label {self.memory_label or '-'} · "
+            f"query {self.memory_query or '-'} · "
             f"selected {selected}/{len(entries)} · "
             f"favorites {favorites} · scope cwd"
         )
@@ -565,6 +576,7 @@ class LoopDashboard(App[None]):
                 f"archived: {entry.archived}",
                 f"labels: {', '.join(entry.labels) or '-'}",
                 f"active label: {self.memory_label or '-'}",
+                f"query: {self.memory_query or '-'}",
                 f"available labels: {len(self._memory_labels())}",
                 "",
                 "usage",
@@ -784,6 +796,15 @@ class LoopDashboard(App[None]):
             self._sync_button_state()
             self._render_selected()
 
+    @on(Input.Changed, "#memory-query")
+    def on_memory_query_changed(self, event: Input.Changed) -> None:
+        self.memory_query = event.value.strip()
+        self.memory_index = 0
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
+        self._sync_button_state()
+        self._render_selected()
+
     def _spawn_resume(self, loop_id: str) -> None:
         subprocess.Popen(
             [
@@ -860,6 +881,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "all"
         self.memory_label = None
+        self.memory_query = ""
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -870,6 +892,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "favorites"
         self.memory_label = None
+        self.memory_query = ""
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -880,6 +903,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "history"
         self.memory_label = None
+        self.memory_query = ""
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -890,6 +914,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "presets"
         self.memory_label = None
+        self.memory_query = ""
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -900,6 +925,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = "archived"
         self.memory_label = None
+        self.memory_query = ""
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
