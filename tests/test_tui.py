@@ -404,6 +404,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text()
+    assert "logs 1/2/3/4/5/6/7/m/0" in text
     assert "memory all" in text
     assert "entries 1" in text
     assert "labels 0/0" in text

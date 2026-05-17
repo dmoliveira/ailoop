@@ -336,7 +336,7 @@ class LoopDashboard(App[None]):
         if self.memory_delete_armed:
             memory_actions.append("x confirm")
         action_text = " · ".join(memory_actions) if memory_actions else "read only"
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
         entries = len(self._memory_entries())
         labels = len(self._memory_labels())
         return (
@@ -401,7 +401,7 @@ class LoopDashboard(App[None]):
 
     def _render_help_bar(self, state: object | None) -> None:
         bar = self.query_one("#help_bar", Static)
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
         if self.log_kind == "memory":
             bar.update(self._memory_help_text())
             return
