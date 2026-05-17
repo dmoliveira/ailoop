@@ -614,6 +614,14 @@ class LoopDashboard(App[None]):
                     f"{labels:<11}  {entry.title}"
                 )
             return "\n".join(lines)
+        if self.memory_filter == "archived":
+            return (
+                "No archived memory entries found.\n\n"
+                f"scope: {self._memory_scope_text()} · label: {self.memory_label or '-'} · "
+                f"query: {self.memory_query or '-'}\n"
+                "Archive one from the memory list with z twice, or press 5 for all entries.\n"
+                f"Press o to {self._memory_scope_toggle_hint()}."
+            )
         return (
             "No memory entries found.\n\n"
             f"scope: {self._memory_scope_text()} · filter: {self.memory_filter} · "
