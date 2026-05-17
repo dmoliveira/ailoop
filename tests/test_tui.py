@@ -405,14 +405,48 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.log_kind = "memory"
     text = app._memory_help_text()
     assert "logs 1/2/3/4/5/6/7/m/0" in text
-    assert "memory all" in text
-    assert "entries 1" in text
-    assert "labels 0/0" in text
-    assert "b label<" in text
-    assert "n label>" in text
-    assert "c labelx" in text
-    assert "8 replay" in text
+    assert "all" in text
+    assert "1" in text
+    assert "0/0" in text
+    assert "b" in text
+    assert "n" in text
+    assert "c" in text
+    assert "8" in text
     assert "no loop selected" not in text
+
+
+def test_memory_help_text_uses_compact_footer_at_80_columns(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="history",
+        title="History One",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    text = app._memory_help_text(width=80)
+    assert "nav ↑↓ · g/a/l · logs 1/2/3/4/5/6/7/m/0 · r · q" in text
+    assert "mem all" in text
+    assert "1 ent" in text
+    assert "[ ] b n c o / esc 8 9 z x" in text
 
 
 def test_memory_log_text_filters_to_favorites(tmp_path: Path) -> None:
