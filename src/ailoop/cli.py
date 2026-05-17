@@ -268,6 +268,12 @@ def build_parser() -> argparse.ArgumentParser:
     memory_list.add_argument("--favorites", action="store_true", help="Show only favorite entries")
     memory_list.add_argument("--archived", action="store_true", help="Show only archived entries")
     memory_list.add_argument(
+        "--label",
+        action="append",
+        default=[],
+        help="Require label (repeatable)",
+    )
+    memory_list.add_argument(
         "--all-folders",
         action="store_true",
         help="Show entries from all folders for the current user",
@@ -614,6 +620,7 @@ def main() -> None:
                     kind=None if args.kind == "all" else args.kind,
                     favorites_only=args.favorites,
                     include_archived=args.archived,
+                    labels=args.label,
                     all_folders=args.all_folders,
                     folder=Path.cwd(),
                 )

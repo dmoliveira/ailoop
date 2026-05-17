@@ -299,6 +299,67 @@ def test_memory_archive_list_and_restore(capsys, monkeypatch, tmp_path: Path) ->
     assert [entry["id"] for entry in default_list] == [entry_id]
 
 
+def test_memory_list_filters_by_label(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Tagged One",
+            "Keep for later",
+            "--label",
+            "ops",
+            "--label",
+            "nightly",
+        ],
+    )
+    main()
+    tagged = json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Tagged Two",
+            "Something else",
+            "--label",
+            "ops",
+        ],
+    )
+    main()
+    json.loads(capsys.readouterr().out)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "list",
+            "--label",
+            "ops",
+            "--label",
+            "nightly",
+        ],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in listed] == [tagged["id"]]
+
+
 def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 

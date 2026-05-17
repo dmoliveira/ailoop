@@ -212,12 +212,14 @@ class MemoryStore:
         kind: MemoryKind | None = None,
         favorites_only: bool = False,
         include_archived: bool = False,
+        labels: list[str] | None = None,
         all_folders: bool = False,
         folder: Path | None = None,
         user_id: str | None = None,
     ) -> list[MemoryEntry]:
         dirs = [self._kind_dir(kind)] if kind else [self.presets_dir, self.history_dir]
         entries: list[MemoryEntry] = []
+        required_labels = set(labels or [])
         folder_path = str(folder.expanduser().resolve()) if folder else None
         actual_user = user_id or current_user_id()
         for directory in dirs:
@@ -226,6 +228,8 @@ class MemoryStore:
                 if entry.archived and not include_archived:
                     continue
                 if favorites_only and not entry.favorite:
+                    continue
+                if required_labels and not required_labels.issubset(set(entry.labels)):
                     continue
                 if entry.scope.user_id != actual_user:
                     continue
