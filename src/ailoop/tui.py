@@ -410,6 +410,13 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return self._unselected_detail_message()
+        show_command = f"ailoop memory show {entry.id}"
+        edit_command = f"ailoop memory edit {entry.id} --title {shlex.quote(entry.title)}"
+        favorite_command = (
+            f"ailoop memory favorite {entry.id}"
+            if not entry.favorite
+            else f"ailoop memory favorite {entry.id} --off"
+        )
         return "\n".join(
             [
                 f"memory {entry.id}",
@@ -429,6 +436,11 @@ class LoopDashboard(App[None]):
                 f"runner: {entry.current.runner}",
                 f"agent: {entry.current.agent or '-'}",
                 f"steps: {entry.current.steps}",
+                "",
+                "commands",
+                show_command,
+                edit_command,
+                favorite_command,
                 "",
                 "actions",
                 "8 replay top entry",
