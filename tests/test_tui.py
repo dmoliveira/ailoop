@@ -268,7 +268,7 @@ def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> No
     app.memory = memory
     assert (
         app._memory_log_meta()
-        == "source memory · filter all · entries 2 · favorites 1 · scope cwd"
+        == "source memory · filter all · selected 1/2 · favorites 1 · scope cwd"
     )
 
 
@@ -395,6 +395,85 @@ def test_memory_replay_uses_top_filtered_entry(monkeypatch, tmp_path: Path) -> N
     assert command[-2:] == ["replay", entry.id]
 
 
+def test_memory_selection_moves_to_next_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    first = memory.create(
+        kind="preset",
+        title="First",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    second = memory.create(
+        kind="preset",
+        title="Second",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    assert app._primary_memory_entry().id == second.id
+    app.action_memory_next()
+    assert app._primary_memory_entry().id == first.id
+
+
+def test_memory_log_text_marks_selected_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="First",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    selected = memory.create(
+        kind="preset",
+        title="Second",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    text = app._memory_log_text()
+    assert f">   {selected.id}" in text
+
+
 def test_memory_favorite_toggles_top_filtered_entry(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -428,6 +507,50 @@ def test_memory_favorite_toggles_top_filtered_entry(tmp_path: Path) -> None:
     app.action_memory_favorite()
     updated = memory.load(entry.id, folder=Path.cwd())
     assert updated.favorite is True
+
+
+def test_memory_favorite_toggles_selected_entry(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    first = memory.create(
+        kind="preset",
+        title="First",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    second = memory.create(
+        kind="preset",
+        title="Second",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    app.action_memory_next()
+    app.action_memory_favorite()
+    assert memory.load(first.id, folder=Path.cwd()).favorite is True
+    assert memory.load(second.id, folder=Path.cwd()).favorite is False
 
 
 def test_memory_detail_text_includes_show_and_edit_commands(tmp_path: Path) -> None:
