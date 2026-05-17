@@ -19,7 +19,7 @@ from .tasks import parse_task_file
 
 FilterMode = Literal["running", "active", "all"]
 LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
-MemoryFilter = Literal["all", "favorites", "history"]
+MemoryFilter = Literal["all", "favorites", "history", "archived"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
@@ -169,8 +169,10 @@ class LoopDashboard(App[None]):
         ("5", "set_log_memory", "Memory"),
         ("6", "set_log_memory_favorites", "Favorites"),
         ("7", "set_log_memory_history", "History"),
+        ("0", "set_log_memory_archived", "Archived"),
         ("8", "memory_replay", "Replay Memory"),
         ("9", "memory_favorite", "Toggle Favorite"),
+        ("v", "memory_restore", "Restore Memory"),
         ("z", "memory_archive", "Archive Memory"),
         ("x", "memory_delete", "Delete Memory"),
         ("[", "memory_prev", "Prev Memory"),
@@ -233,8 +235,10 @@ class LoopDashboard(App[None]):
                     yield Button("5 memory", id="log-memory")
                     yield Button("6 favorites", id="log-memory-favorites")
                     yield Button("7 history", id="log-memory-history")
+                    yield Button("0 archived", id="log-memory-archived")
                     yield Button("8 replay", id="memory-replay")
                     yield Button("9 favorite", id="memory-favorite")
+                    yield Button("v restore", id="memory-restore")
                     yield Button("z archive", id="memory-archive")
                     yield Button("x delete", id="memory-delete")
                 yield Static(id="log_meta")
@@ -287,6 +291,7 @@ class LoopDashboard(App[None]):
             "log-memory": self.log_kind == "memory" and self.memory_filter == "all",
             "log-memory-favorites": self.log_kind == "memory" and self.memory_filter == "favorites",
             "log-memory-history": self.log_kind == "memory" and self.memory_filter == "history",
+            "log-memory-archived": self.log_kind == "memory" and self.memory_filter == "archived",
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
         self.query_one("#pause", Button).disabled = not can_pause
@@ -299,8 +304,11 @@ class LoopDashboard(App[None]):
         self.query_one("#memory-favorite", Button).disabled = not (
             self.log_kind == "memory" and memory_entry is not None
         )
+        self.query_one("#memory-restore", Button).disabled = not (
+            self.log_kind == "memory" and memory_entry is not None and memory_entry.archived
+        )
         self.query_one("#memory-archive", Button).disabled = not (
-            self.log_kind == "memory" and memory_entry is not None
+            self.log_kind == "memory" and memory_entry is not None and not memory_entry.archived
         )
         self.query_one("#memory-archive", Button).label = (
             "z confirm" if self.memory_archive_armed else "z archive"
@@ -326,6 +334,8 @@ class LoopDashboard(App[None]):
                 memory_actions.extend(
                     ["[ prev", "] next", "8 replay", "9 favorite", "z archive", "x delete"]
                 )
+                if self._primary_memory_entry().archived:  # type: ignore[union-attr]
+                    memory_actions.append("v restore")
             if self.memory_archive_armed:
                 memory_actions.append("z confirm")
             if self.memory_delete_armed:
@@ -392,7 +402,7 @@ class LoopDashboard(App[None]):
                 "choose a loop with ↑↓ or click a row",
                 "filters: g running · a active · l all",
                 "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
-                "      5 memory · 6 favorites · 7 history",
+                "      5 memory · 6 favorites · 7 history · 0 archived",
             ]
         )
 
@@ -401,6 +411,12 @@ class LoopDashboard(App[None]):
             return self.memory.list_entries(folder=Path.cwd(), favorites_only=True)
         if self.memory_filter == "history":
             return self.memory.list_entries(folder=Path.cwd(), kind="history")
+        if self.memory_filter == "archived":
+            return [
+                entry
+                for entry in self.memory.list_entries(folder=Path.cwd(), include_archived=True)
+                if entry.archived
+            ]
         return self.memory.list_entries(folder=Path.cwd())
 
     def _selected_memory_index(self) -> int:
@@ -451,6 +467,7 @@ class LoopDashboard(App[None]):
             "all": "5",
             "favorites": "6",
             "history": "7",
+            "archived": "0",
         }[self.memory_filter]
 
     def _memory_detail_text(self) -> str:
@@ -472,6 +489,7 @@ class LoopDashboard(App[None]):
                 f"title: {entry.title}",
                 f"kind: {entry.kind}",
                 f"favorite: {entry.favorite}",
+                f"archived: {entry.archived}",
                 f"labels: {', '.join(entry.labels) or '-'}",
                 "",
                 "usage",
@@ -494,6 +512,7 @@ class LoopDashboard(App[None]):
                 "] next entry",
                 "8 replay top entry",
                 "9 toggle favorite",
+                "v restore selected entry",
                 "z archive selected entry",
                 "x delete selected entry",
             ]
@@ -667,6 +686,8 @@ class LoopDashboard(App[None]):
             self.action_memory_replay()
         elif button_id == "memory-favorite":
             self.action_memory_favorite()
+        elif button_id == "memory-restore":
+            self.action_memory_restore()
         elif button_id == "memory-archive":
             self.action_memory_archive()
         elif button_id == "memory-delete":
@@ -775,6 +796,15 @@ class LoopDashboard(App[None]):
         self._sync_button_state()
         self._render_selected()
 
+    def action_set_log_memory_archived(self) -> None:
+        self.log_kind = "memory"
+        self.memory_filter = "archived"
+        self.memory_index = 0
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
+        self._sync_button_state()
+        self._render_selected()
+
     def _move_memory_selection(self, delta: int) -> None:
         entries = self._memory_entries()
         if not entries:
@@ -815,6 +845,16 @@ class LoopDashboard(App[None]):
         updated = self.memory.edit(entry.id, favorite=not entry.favorite, folder=Path.cwd())
         state = "favorite on" if updated.favorite else "favorite off"
         self.notify(f"{state}: {updated.id}")
+        self.refresh_data()
+
+    def action_memory_restore(self) -> None:
+        entry = self._primary_memory_entry()
+        if entry is None or not entry.archived:
+            return
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
+        self.memory.edit(entry.id, archived=False, folder=Path.cwd())
+        self.notify(f"memory restored: {entry.id}")
         self.refresh_data()
 
     def action_memory_archive(self) -> None:
