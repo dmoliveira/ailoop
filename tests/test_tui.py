@@ -266,4 +266,85 @@ def test_memory_log_meta_reports_entry_and_favorite_counts(tmp_path: Path) -> No
     )
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
-    assert app._memory_log_meta() == "source memory · entries 2 · favorites 1 · scope cwd"
+    assert (
+        app._memory_log_meta()
+        == "source memory · filter all · entries 2 · favorites 1 · scope cwd"
+    )
+
+
+def test_memory_log_text_filters_to_favorites(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Fav",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    memory.create(
+        kind="history",
+        title="Plain",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.memory_filter = "favorites"
+    text = app._memory_log_text()
+    assert "Fav" in text
+    assert "Plain" not in text
+
+
+def test_memory_log_text_filters_to_history(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Preset",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    memory.create(
+        kind="history",
+        title="History",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.memory_filter = "history"
+    text = app._memory_log_text()
+    assert "History" in text
+    assert "Preset" not in text

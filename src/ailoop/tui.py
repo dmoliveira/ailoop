@@ -19,6 +19,7 @@ from .tasks import parse_task_file
 
 FilterMode = Literal["running", "active", "all"]
 LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
+MemoryFilter = Literal["all", "favorites", "history"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
@@ -166,6 +167,8 @@ class LoopDashboard(App[None]):
         ("3", "set_log_prompt", "Prompt"),
         ("4", "set_log_events", "Events"),
         ("5", "set_log_memory", "Memory"),
+        ("6", "set_log_memory_favorites", "Favorites"),
+        ("7", "set_log_memory_history", "History"),
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
@@ -174,6 +177,7 @@ class LoopDashboard(App[None]):
     selected_loop_id: reactive[str | None] = reactive(None)
     filter_mode: reactive[FilterMode] = reactive("running")
     log_kind: reactive[LogKind] = reactive("stdout")
+    memory_filter: reactive[MemoryFilter] = reactive("all")
     delete_armed: reactive[bool] = reactive(False)
 
     def _summary_counts(self) -> tuple[int, int, int]:
@@ -218,6 +222,8 @@ class LoopDashboard(App[None]):
                     yield Button("3 prompt", id="log-prompt")
                     yield Button("4 events", id="log-events")
                     yield Button("5 memory", id="log-memory")
+                    yield Button("6 favorites", id="log-memory-favorites")
+                    yield Button("7 history", id="log-memory-history")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -264,7 +270,9 @@ class LoopDashboard(App[None]):
             "log-stderr": self.log_kind == "stderr",
             "log-prompt": self.log_kind == "prompt",
             "log-events": self.log_kind == "events",
-            "log-memory": self.log_kind == "memory",
+            "log-memory": self.log_kind == "memory" and self.memory_filter == "all",
+            "log-memory-favorites": self.log_kind == "memory" and self.memory_filter == "favorites",
+            "log-memory-history": self.log_kind == "memory" and self.memory_filter == "history",
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
         self.query_one("#pause", Button).disabled = not can_pause
@@ -276,7 +284,7 @@ class LoopDashboard(App[None]):
 
     def _render_help_bar(self, state: object | None) -> None:
         bar = self.query_one("#help_bar", Static)
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5 · r refresh · q quit"
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
         if state is None:
             bar.update(base + " · no loop selected")
             return
@@ -338,17 +346,25 @@ class LoopDashboard(App[None]):
                 "",
                 "choose a loop with ↑↓ or click a row",
                 "filters: g running · a active · l all",
-                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events · 5 memory",
+                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
+                "      5 memory · 6 favorites · 7 history",
             ]
         )
 
     def _memory_entries(self):
+        if self.memory_filter == "favorites":
+            return self.memory.list_entries(folder=Path.cwd(), favorites_only=True)
+        if self.memory_filter == "history":
+            return self.memory.list_entries(folder=Path.cwd(), kind="history")
         return self.memory.list_entries(folder=Path.cwd())
 
     def _memory_log_meta(self) -> str:
         entries = self._memory_entries()
         favorites = sum(1 for entry in entries if entry.favorite)
-        return f"source memory · entries {len(entries)} · favorites {favorites} · scope cwd"
+        return (
+            f"source memory · filter {self.memory_filter} · entries {len(entries)} · "
+            f"favorites {favorites} · scope cwd"
+        )
 
     def _memory_log_text(self) -> str:
         entries = self._memory_entries()
@@ -358,8 +374,15 @@ class LoopDashboard(App[None]):
             "No memory entries found.\n\n"
             "Create one with:\n"
             '  ailoop memory save "Quick review" "Review the repo" --runner opencode\n\n'
-            "Then press 5 to refresh this list."
+            f"Then press {self._memory_filter_hint()} to refresh this list."
         )
+
+    def _memory_filter_hint(self) -> str:
+        return {
+            "all": "5",
+            "favorites": "6",
+            "history": "7",
+        }[self.memory_filter]
 
     def refresh_data(self) -> None:
         states = self._filtered_loops()
@@ -589,6 +612,19 @@ class LoopDashboard(App[None]):
 
     def action_set_log_memory(self) -> None:
         self.log_kind = "memory"
+        self.memory_filter = "all"
+        self._sync_button_state()
+        self._render_selected()
+
+    def action_set_log_memory_favorites(self) -> None:
+        self.log_kind = "memory"
+        self.memory_filter = "favorites"
+        self._sync_button_state()
+        self._render_selected()
+
+    def action_set_log_memory_history(self) -> None:
+        self.log_kind = "memory"
+        self.memory_filter = "history"
         self._sync_button_state()
         self._render_selected()
 
