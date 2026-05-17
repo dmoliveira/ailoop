@@ -277,7 +277,15 @@ class LoopDashboard(App[None]):
         paused = sum(1 for state in self.service.list_loops() if state.status == "paused")
         failed = sum(1 for state in self.service.list_loops() if state.status == "failed")
         selected = self._selected_state()
-        summary_text = self._summary_bar_text(total, active, running, paused, failed, selected)
+        summary_text = self._summary_bar_text(
+            total,
+            active,
+            running,
+            paused,
+            failed,
+            selected,
+            width=self.size.width,
+        )
         self.query_one("#summary_bar", Static).update(summary_text)
 
     def _summary_bar_text(
@@ -288,25 +296,49 @@ class LoopDashboard(App[None]):
         paused: int,
         failed: int,
         state: object | None,
+        width: int | None = None,
     ) -> str:
-        selected_text = self._summary_selected_text(state)
-        base = (
-            f"all {total} · active {active} · running {running} · paused {paused} · "
-            f"failed {failed}"
-        )
+        actual_width = width or 0
+        compact = bool(actual_width and actual_width <= 80)
+        selected_text = self._summary_selected_text(state, width=actual_width)
+        if compact:
+            base = f"all {total} · act {active} · run {running} · pause {paused} · fail {failed}"
+        else:
+            base = (
+                f"all {total} · active {active} · running {running} · paused {paused} · "
+                f"failed {failed}"
+            )
         if self.log_kind == "memory":
+            if compact:
+                return f"{base} · f {self.filter_mode} · {selected_text}"
             return f"{base} · filter {self.filter_mode} · {selected_text}"
+        if compact:
+            return f"{base} · f {self.filter_mode} · {self.log_kind} · {selected_text}"
         return f"{base} · filter {self.filter_mode} · log {self.log_kind} · {selected_text}"
 
-    def _summary_selected_text(self, state: object | None) -> str:
+    def _summary_selected_text(self, state: object | None, width: int | None = None) -> str:
+        actual_width = width or 0
+        compact = bool(actual_width and actual_width <= 80)
         if self.log_kind == "memory":
             entry = self._primary_memory_entry()
             label_count = len(self._memory_labels())
             if entry is None:
+                if compact:
+                    return f"mem {self.memory_filter} · lab {label_count} · sel none"
                 return f"memory {self.memory_filter} · labels {label_count} · selected none"
+            if compact:
+                compact_id = entry.id[:8]
+                return (
+                    f"mem {self.memory_filter} · lab {label_count} · "
+                    f"sel {compact_id}"
+                )
             return f"memory {self.memory_filter} · labels {label_count} · selected {entry.id}"
         if state is None:
+            if compact:
+                return "sel none"
             return "selected none"
+        if compact:
+            return f"sel {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
         return f"selected {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
 
     def _footer_base_text(self, width: int | None = None) -> str:

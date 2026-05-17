@@ -344,6 +344,37 @@ def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_pat
     assert "c clear label" in text
 
 
+def test_summary_selected_text_compacts_in_memory_mode_at_80_columns(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Quick review",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+        labels=["ops"],
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    assert app._summary_selected_text(None, width=80) == f"mem all · lab 1 · sel {entry.id[:8]}"
+
+
 def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -374,6 +405,45 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     text = app._summary_bar_text(0, 0, 0, 0, 0, None)
     assert f"memory all · labels 0 · selected {entry.id}" in text
     assert "log memory" not in text
+
+
+def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Quick review",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=True,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
+    assert "all 0 · act 0 · run 0 · pause 0 · fail 0" in text
+    assert "f running" in text
+    assert f"mem all · lab 0 · sel {entry.id[:8]}" in text
+
+
+def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
+    assert text == "all 0 · act 0 · run 0 · pause 0 · fail 0 · f running · stdout · sel none"
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
