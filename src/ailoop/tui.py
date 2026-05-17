@@ -261,16 +261,38 @@ class LoopDashboard(App[None]):
         paused = sum(1 for state in self.service.list_loops() if state.status == "paused")
         failed = sum(1 for state in self.service.list_loops() if state.status == "failed")
         selected = self._selected_state()
-        selected_text = (
-            f"selected {short_loop_id(selected.loop_id)} · {short_status(selected.status)}"
-            if selected is not None
-            else "selected none"
-        )
+        selected_text = self._summary_selected_text(selected)
         summary_text = (
             f"all {total} · active {active} · running {running} · paused {paused} · "
             f"failed {failed} · filter {self.filter_mode} · log {self.log_kind} · {selected_text}"
         )
         self.query_one("#summary_bar", Static).update(summary_text)
+
+    def _summary_selected_text(self, state: object | None) -> str:
+        if self.log_kind == "memory":
+            entry = self._primary_memory_entry()
+            if entry is None:
+                return f"memory {self.memory_filter} · selected none"
+            return f"memory {self.memory_filter} · selected {entry.id}"
+        if state is None:
+            return "selected none"
+        return f"selected {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
+
+    def _memory_help_text(self) -> str:
+        memory_actions = []
+        if self._primary_memory_entry() is not None:
+            memory_actions.extend(
+                ["[ prev", "] next", "8 replay", "9 favorite", "z archive", "x delete"]
+            )
+            if self._primary_memory_entry().archived:  # type: ignore[union-attr]
+                memory_actions.append("v restore")
+        if self.memory_archive_armed:
+            memory_actions.append("z confirm")
+        if self.memory_delete_armed:
+            memory_actions.append("x confirm")
+        action_text = " · ".join(memory_actions) if memory_actions else "read only"
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
+        return f"{base} · memory {self.memory_filter} · actions {action_text}"
 
     def _sync_button_state(self) -> None:
         state = self._selected_state()
@@ -325,23 +347,11 @@ class LoopDashboard(App[None]):
     def _render_help_bar(self, state: object | None) -> None:
         bar = self.query_one("#help_bar", Static)
         base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
+        if self.log_kind == "memory":
+            bar.update(self._memory_help_text())
+            return
         if state is None:
             bar.update(base + " · no loop selected")
-            return
-        if self.log_kind == "memory":
-            memory_actions = []
-            if self._primary_memory_entry() is not None:
-                memory_actions.extend(
-                    ["[ prev", "] next", "8 replay", "9 favorite", "z archive", "x delete"]
-                )
-                if self._primary_memory_entry().archived:  # type: ignore[union-attr]
-                    memory_actions.append("v restore")
-            if self.memory_archive_armed:
-                memory_actions.append("z confirm")
-            if self.memory_delete_armed:
-                memory_actions.append("x confirm")
-            action_text = " · ".join(memory_actions) if memory_actions else "read only"
-            bar.update(f"{base} · memory {self.memory_filter} · actions {action_text}")
             return
         loop_state = state.status  # type: ignore[attr-defined]
         actions: list[str] = []
