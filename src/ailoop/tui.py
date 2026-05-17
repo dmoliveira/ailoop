@@ -12,12 +12,13 @@ from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, DataTable, Header, Static
 
+from .memory import MemoryStore, render_memory_list
 from .service import LoopService
 from .stats import STATUS_ICONS
 from .tasks import parse_task_file
 
 FilterMode = Literal["running", "active", "all"]
-LogKind = Literal["stdout", "stderr", "prompt", "events"]
+LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
@@ -164,6 +165,7 @@ class LoopDashboard(App[None]):
         ("2", "set_log_stderr", "Stderr"),
         ("3", "set_log_prompt", "Prompt"),
         ("4", "set_log_events", "Events"),
+        ("5", "set_log_memory", "Memory"),
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
@@ -187,6 +189,7 @@ class LoopDashboard(App[None]):
 
         app_config = load_app_config(config_path)
         self.service = LoopService(Path(app_config.paths.state_dir), emit_output=False)
+        self.memory = MemoryStore(Path(app_config.paths.state_dir))
         self.initial_loop_id = loop_id
         if loop_id is not None:
             self.filter_mode = "all"
@@ -214,6 +217,7 @@ class LoopDashboard(App[None]):
                     yield Button("2 stderr", id="log-stderr")
                     yield Button("3 prompt", id="log-prompt")
                     yield Button("4 events", id="log-events")
+                    yield Button("5 memory", id="log-memory")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -260,6 +264,7 @@ class LoopDashboard(App[None]):
             "log-stderr": self.log_kind == "stderr",
             "log-prompt": self.log_kind == "prompt",
             "log-events": self.log_kind == "events",
+            "log-memory": self.log_kind == "memory",
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
         self.query_one("#pause", Button).disabled = not can_pause
@@ -271,7 +276,7 @@ class LoopDashboard(App[None]):
 
     def _render_help_bar(self, state: object | None) -> None:
         bar = self.query_one("#help_bar", Static)
-        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4 · r refresh · q quit"
+        base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5 · r refresh · q quit"
         if state is None:
             bar.update(base + " · no loop selected")
             return
@@ -333,8 +338,27 @@ class LoopDashboard(App[None]):
                 "",
                 "choose a loop with ↑↓ or click a row",
                 "filters: g running · a active · l all",
-                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
+                "logs: 1 stdout · 2 stderr · 3 prompt · 4 events · 5 memory",
             ]
+        )
+
+    def _memory_entries(self):
+        return self.memory.list_entries(folder=Path.cwd())
+
+    def _memory_log_meta(self) -> str:
+        entries = self._memory_entries()
+        favorites = sum(1 for entry in entries if entry.favorite)
+        return f"source memory · entries {len(entries)} · favorites {favorites} · scope cwd"
+
+    def _memory_log_text(self) -> str:
+        entries = self._memory_entries()
+        if entries:
+            return render_memory_list(entries)
+        return (
+            "No memory entries found.\n\n"
+            "Create one with:\n"
+            '  ailoop memory save "Quick review" "Review the repo" --runner opencode\n\n'
+            "Then press 5 to refresh this list."
         )
 
     def refresh_data(self) -> None:
@@ -398,6 +422,13 @@ class LoopDashboard(App[None]):
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
+        if self.log_kind == "memory":
+            if state is None:
+                detail.update(self._unselected_detail_message())
+            log_meta.update(self._memory_log_meta())
+            log_view.update(self._memory_log_text())
+            if state is None:
+                return
         if state is None:
             detail.update(self._unselected_detail_message())
             log_meta.update(f"source {self.log_kind} · no loop selected")
@@ -553,6 +584,11 @@ class LoopDashboard(App[None]):
 
     def action_set_log_events(self) -> None:
         self.log_kind = "events"
+        self._sync_button_state()
+        self._render_selected()
+
+    def action_set_log_memory(self) -> None:
+        self.log_kind = "memory"
         self._sync_button_state()
         self._render_selected()
 
