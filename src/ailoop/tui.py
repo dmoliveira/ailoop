@@ -271,6 +271,8 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def _render_summary_bar(self) -> None:
+        if not self.is_mounted:
+            return
         total = len(self.service.list_loops())
         active = sum(1 for state in self.service.list_loops() if state.status in ACTIVE_STATUSES)
         running = sum(1 for state in self.service.list_loops() if state.status in RUNNING_STATUSES)
@@ -286,7 +288,10 @@ class LoopDashboard(App[None]):
             selected,
             width=self.size.width,
         )
-        self.query_one("#summary_bar", Static).update(summary_text)
+        try:
+            self.query_one("#summary_bar", Static).update(summary_text)
+        except Exception:
+            return
 
     def _summary_bar_text(
         self,
@@ -798,6 +803,7 @@ class LoopDashboard(App[None]):
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
+        self._render_summary_bar()
         if self.log_kind == "memory":
             detail.update(self._memory_detail_text())
             log_meta.update(self._memory_log_meta())
@@ -901,8 +907,16 @@ class LoopDashboard(App[None]):
             self.action_filter_active()
         elif button_id == "filter-all":
             self.action_filter_all()
+        elif button_id == "log-memory":
+            self.action_set_log_memory()
+        elif button_id == "log-memory-favorites":
+            self.action_set_log_memory_favorites()
+        elif button_id == "log-memory-history":
+            self.action_set_log_memory_history()
         elif button_id == "log-memory-presets":
             self.action_set_log_memory_presets()
+        elif button_id == "log-memory-archived":
+            self.action_set_log_memory_archived()
         elif button_id == "memory-label-prev":
             self.action_memory_label_prev()
         elif button_id == "memory-label-next":
@@ -936,6 +950,7 @@ class LoopDashboard(App[None]):
         self.memory_archive_armed = False
         self.memory_delete_armed = False
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def _spawn_resume(self, loop_id: str) -> None:
@@ -993,21 +1008,25 @@ class LoopDashboard(App[None]):
     def action_set_log_stdout(self) -> None:
         self.log_kind = "stdout"
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def action_set_log_stderr(self) -> None:
         self.log_kind = "stderr"
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def action_set_log_prompt(self) -> None:
         self.log_kind = "prompt"
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def action_set_log_events(self) -> None:
         self.log_kind = "events"
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def _activate_memory_filter(self, memory_filter: MemoryFilter) -> None:
@@ -1017,6 +1036,7 @@ class LoopDashboard(App[None]):
         self.memory_archive_armed = False
         self.memory_delete_armed = False
         self._sync_button_state()
+        self._render_summary_bar()
         self._render_selected()
 
     def action_set_log_memory(self) -> None:

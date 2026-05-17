@@ -654,6 +654,42 @@ def test_set_log_memory_presets_preserves_search_context(tmp_path: Path) -> None
     assert app.memory_index == 0
 
 
+def test_set_log_memory_rerenders_summary_bar(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    seen: list[str] = []
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    app._render_summary_bar = lambda: seen.append("summary")  # type: ignore[method-assign]
+    app.action_set_log_memory()
+    assert app.log_kind == "memory"
+    assert app.memory_filter == "all"
+    assert seen == ["summary"]
+
+
+def test_memory_toolbar_buttons_route_to_memory_actions() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    seen: list[str] = []
+    app.action_set_log_memory = lambda: seen.append("memory")  # type: ignore[method-assign]
+    app.action_set_log_memory_favorites = lambda: seen.append("favorites")  # type: ignore[method-assign]
+    app.action_set_log_memory_history = lambda: seen.append("history")  # type: ignore[method-assign]
+    app.action_set_log_memory_archived = lambda: seen.append("archived")  # type: ignore[method-assign]
+
+    class FakeButton:
+        def __init__(self, button_id: str) -> None:
+            self.id = button_id
+
+    class FakeEvent:
+        def __init__(self, button_id: str) -> None:
+            self.button = FakeButton(button_id)
+
+    app.on_button_pressed(FakeEvent("log-memory"))
+    app.on_button_pressed(FakeEvent("log-memory-favorites"))
+    app.on_button_pressed(FakeEvent("log-memory-history"))
+    app.on_button_pressed(FakeEvent("log-memory-archived"))
+
+    assert seen == ["memory", "favorites", "history", "archived"]
+
+
 def test_memory_log_text_filters_to_selected_label(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
