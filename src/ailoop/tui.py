@@ -644,10 +644,39 @@ class LoopDashboard(App[None]):
     def _memory_scope_toggle_hint(self) -> str:
         return "return to cwd scope" if self.memory_all_folders else "show all folders"
 
+    def _empty_memory_detail_text(self) -> str:
+        lines = [
+            "memory overview",
+            f"filter: {self.memory_filter}",
+            f"scope: {self._memory_scope_text()}",
+            f"label: {self.memory_label or '-'}",
+            f"query: {self.memory_query or '-'}",
+            "",
+        ]
+        if self.memory_filter == "archived":
+            lines.extend(
+                [
+                    "no archived entries match this view",
+                    "archive one from memory mode with z twice",
+                    "press 5 to return to all entries",
+                    f"press o to {self._memory_scope_toggle_hint()}",
+                ]
+            )
+        else:
+            lines.extend(
+                [
+                    "no memory entry is selected",
+                    "save one with ailoop memory save ...",
+                    f"press {self._memory_filter_hint()} to refresh this filter",
+                    f"press o to {self._memory_scope_toggle_hint()}",
+                ]
+            )
+        return "\n".join(lines)
+
     def _memory_detail_text(self) -> str:
         entry = self._primary_memory_entry()
         if entry is None:
-            return self._unselected_detail_message()
+            return self._empty_memory_detail_text()
         show_command = f"ailoop memory show {entry.id}"
         edit_command = f"ailoop memory edit {entry.id} --title {shlex.quote(entry.title)}"
         favorite_command = (
