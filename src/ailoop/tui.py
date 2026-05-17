@@ -169,6 +169,8 @@ class LoopDashboard(App[None]):
         ("5", "set_log_memory", "Memory"),
         ("6", "set_log_memory_favorites", "Favorites"),
         ("7", "set_log_memory_history", "History"),
+        ("8", "memory_replay", "Replay Memory"),
+        ("9", "memory_favorite", "Toggle Favorite"),
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
@@ -224,6 +226,8 @@ class LoopDashboard(App[None]):
                     yield Button("5 memory", id="log-memory")
                     yield Button("6 favorites", id="log-memory-favorites")
                     yield Button("7 history", id="log-memory-history")
+                    yield Button("8 replay", id="memory-replay")
+                    yield Button("9 favorite", id="memory-favorite")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -262,6 +266,7 @@ class LoopDashboard(App[None]):
         can_resume = status in {"paused", "stopped", "failed", "idle"}
         can_stop = status in {"running", "pause_requested", "paused"}
         can_remove = status not in {None, "running", "pause_requested", "stop_requested"}
+        memory_entry = self._primary_memory_entry()
         for button_id, active in {
             "filter-running": self.filter_mode == "running",
             "filter-active": self.filter_mode == "active",
@@ -279,6 +284,12 @@ class LoopDashboard(App[None]):
         self.query_one("#resume", Button).disabled = not can_resume
         self.query_one("#stop", Button).disabled = not can_stop
         self.query_one("#remove", Button).disabled = not can_remove
+        self.query_one("#memory-replay", Button).disabled = not (
+            self.log_kind == "memory" and memory_entry is not None
+        )
+        self.query_one("#memory-favorite", Button).disabled = not (
+            self.log_kind == "memory" and memory_entry is not None
+        )
         self.query_one("#remove", Button).label = "✖ Confirm" if self.delete_armed else "✖ Delete"
         self._render_help_bar(state)
 
@@ -287,6 +298,13 @@ class LoopDashboard(App[None]):
         base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
         if state is None:
             bar.update(base + " · no loop selected")
+            return
+        if self.log_kind == "memory":
+            memory_actions = []
+            if self._primary_memory_entry() is not None:
+                memory_actions.extend(["8 replay", "9 favorite"])
+            action_text = " · ".join(memory_actions) if memory_actions else "read only"
+            bar.update(f"{base} · memory {self.memory_filter} · actions {action_text}")
             return
         loop_state = state.status  # type: ignore[attr-defined]
         actions: list[str] = []
@@ -358,6 +376,10 @@ class LoopDashboard(App[None]):
             return self.memory.list_entries(folder=Path.cwd(), kind="history")
         return self.memory.list_entries(folder=Path.cwd())
 
+    def _primary_memory_entry(self):
+        entries = self._memory_entries()
+        return entries[0] if entries else None
+
     def _memory_log_meta(self) -> str:
         entries = self._memory_entries()
         favorites = sum(1 for entry in entries if entry.favorite)
@@ -383,6 +405,36 @@ class LoopDashboard(App[None]):
             "favorites": "6",
             "history": "7",
         }[self.memory_filter]
+
+    def _memory_detail_text(self) -> str:
+        entry = self._primary_memory_entry()
+        if entry is None:
+            return self._unselected_detail_message()
+        return "\n".join(
+            [
+                f"memory {entry.id}",
+                "",
+                "summary",
+                f"title: {entry.title}",
+                f"kind: {entry.kind}",
+                f"favorite: {entry.favorite}",
+                f"labels: {', '.join(entry.labels) or '-'}",
+                "",
+                "usage",
+                f"used: {entry.use_count}",
+                f"last used: {entry.last_used_at or '-'}",
+                f"versions: {entry.latest_version}",
+                "",
+                "run",
+                f"runner: {entry.current.runner}",
+                f"agent: {entry.current.agent or '-'}",
+                f"steps: {entry.current.steps}",
+                "",
+                "actions",
+                "8 replay top entry",
+                "9 toggle favorite",
+            ]
+        )
 
     def refresh_data(self) -> None:
         states = self._filtered_loops()
@@ -446,12 +498,10 @@ class LoopDashboard(App[None]):
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
         if self.log_kind == "memory":
-            if state is None:
-                detail.update(self._unselected_detail_message())
+            detail.update(self._memory_detail_text())
             log_meta.update(self._memory_log_meta())
             log_view.update(self._memory_log_text())
-            if state is None:
-                return
+            return
         if state is None:
             detail.update(self._unselected_detail_message())
             log_meta.update(f"source {self.log_kind} · no loop selected")
@@ -550,6 +600,10 @@ class LoopDashboard(App[None]):
             self.action_filter_active()
         elif button_id == "filter-all":
             self.action_filter_all()
+        elif button_id == "memory-replay":
+            self.action_memory_replay()
+        elif button_id == "memory-favorite":
+            self.action_memory_favorite()
         elif button_id and button_id.startswith("log-"):
             self.log_kind = button_id.removeprefix("log-")  # type: ignore[assignment]
             self._sync_button_state()
@@ -566,6 +620,23 @@ class LoopDashboard(App[None]):
                 str(self.config_path),
                 "resume",
                 loop_id,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    def _spawn_replay(self, entry_id: str) -> None:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "ailoop.cli",
+                "--quiet",
+                "--config",
+                str(self.config_path),
+                "replay",
+                entry_id,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -627,6 +698,23 @@ class LoopDashboard(App[None]):
         self.memory_filter = "history"
         self._sync_button_state()
         self._render_selected()
+
+    def action_memory_replay(self) -> None:
+        entry = self._primary_memory_entry()
+        if entry is None:
+            return
+        self._spawn_replay(entry.id)
+        self.notify(f"replay sent: {entry.id}")
+        self.refresh_data()
+
+    def action_memory_favorite(self) -> None:
+        entry = self._primary_memory_entry()
+        if entry is None:
+            return
+        updated = self.memory.edit(entry.id, favorite=not entry.favorite, folder=Path.cwd())
+        state = "favorite on" if updated.favorite else "favorite off"
+        self.notify(f"{state}: {updated.id}")
+        self.refresh_data()
 
     def action_pause_selected(self) -> None:
         if self.selected_loop_id:
