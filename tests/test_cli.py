@@ -236,6 +236,59 @@ def test_memory_favorite_and_delete(capsys, monkeypatch, tmp_path: Path) -> None
         raise AssertionError("entry should be deleted")
 
 
+def test_memory_archive_list_and_restore(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "save",
+            "Archive me",
+            "Keep for later",
+        ],
+    )
+    main()
+    saved = json.loads(capsys.readouterr().out)
+    entry_id = saved["id"]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "archive", entry_id],
+    )
+    main()
+    archived = json.loads(capsys.readouterr().out)
+    assert archived["archived"] is True
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "list", "--archived"],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in listed] == [entry_id]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "archive", entry_id, "--off"],
+    )
+    main()
+    restored = json.loads(capsys.readouterr().out)
+    assert restored["archived"] is False
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "list"],
+    )
+    main()
+    default_list = json.loads(capsys.readouterr().out)
+    assert [entry["id"] for entry in default_list] == [entry_id]
+
+
 def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 
