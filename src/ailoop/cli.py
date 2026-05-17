@@ -266,6 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_list.add_argument("--kind", choices=["all", "preset", "history"], default="all")
     memory_list.add_argument("--favorites", action="store_true", help="Show only favorite entries")
+    memory_list.add_argument("--archived", action="store_true", help="Show only archived entries")
     memory_list.add_argument(
         "--all-folders",
         action="store_true",
@@ -336,6 +337,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     memory_favorite.add_argument("entry_id", help="Saved memory entry id")
     memory_favorite.add_argument("--off", action="store_true", help="Remove favorite mark")
+
+    memory_archive = memory_subparsers.add_parser(
+        "archive",
+        help="Archive or restore entry",
+        description="Archive a memory entry so it is hidden from default lists, or restore it.",
+    )
+    memory_archive.add_argument("entry_id", help="Saved memory entry id")
+    memory_archive.add_argument("--off", action="store_true", help="Restore archived entry")
 
     memory_delete = memory_subparsers.add_parser(
         "delete",
@@ -604,9 +613,12 @@ def main() -> None:
                 entries = memory.list_entries(
                     kind=None if args.kind == "all" else args.kind,
                     favorites_only=args.favorites,
+                    include_archived=args.archived,
                     all_folders=args.all_folders,
                     folder=Path.cwd(),
                 )
+                if args.archived:
+                    entries = [entry for entry in entries if entry.archived]
                 if args.json:
                     print_json([entry.to_dict() for entry in entries])
                 elif not args.quiet:
@@ -654,6 +666,14 @@ def main() -> None:
 
             if args.memory_command == "favorite":
                 entry = memory.edit(args.entry_id, favorite=not args.off, folder=Path.cwd())
+                if args.json:
+                    print_json(entry.to_dict())
+                elif not args.quiet:
+                    print(render_memory_show(entry))
+                return
+
+            if args.memory_command == "archive":
+                entry = memory.edit(args.entry_id, archived=not args.off, folder=Path.cwd())
                 if args.json:
                     print_json(entry.to_dict())
                 elif not args.quiet:
