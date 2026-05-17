@@ -922,60 +922,29 @@ class LoopDashboard(App[None]):
         self._sync_button_state()
         self._render_selected()
 
-    def action_set_log_memory(self) -> None:
+    def _activate_memory_filter(self, memory_filter: MemoryFilter) -> None:
         self.log_kind = "memory"
-        self.memory_filter = "all"
-        self.memory_label = None
-        self.memory_query = ""
+        self.memory_filter = memory_filter
         self.memory_index = 0
         self.memory_archive_armed = False
         self.memory_delete_armed = False
         self._sync_button_state()
         self._render_selected()
+
+    def action_set_log_memory(self) -> None:
+        self._activate_memory_filter("all")
 
     def action_set_log_memory_favorites(self) -> None:
-        self.log_kind = "memory"
-        self.memory_filter = "favorites"
-        self.memory_label = None
-        self.memory_query = ""
-        self.memory_index = 0
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
-        self._sync_button_state()
-        self._render_selected()
+        self._activate_memory_filter("favorites")
 
     def action_set_log_memory_history(self) -> None:
-        self.log_kind = "memory"
-        self.memory_filter = "history"
-        self.memory_label = None
-        self.memory_query = ""
-        self.memory_index = 0
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
-        self._sync_button_state()
-        self._render_selected()
+        self._activate_memory_filter("history")
 
     def action_set_log_memory_presets(self) -> None:
-        self.log_kind = "memory"
-        self.memory_filter = "presets"
-        self.memory_label = None
-        self.memory_query = ""
-        self.memory_index = 0
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
-        self._sync_button_state()
-        self._render_selected()
+        self._activate_memory_filter("presets")
 
     def action_set_log_memory_archived(self) -> None:
-        self.log_kind = "memory"
-        self.memory_filter = "archived"
-        self.memory_label = None
-        self.memory_query = ""
-        self.memory_index = 0
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
-        self._sync_button_state()
-        self._render_selected()
+        self._activate_memory_filter("archived")
 
     def _move_memory_selection(self, delta: int) -> None:
         entries = self._memory_entries()

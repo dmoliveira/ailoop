@@ -531,17 +531,21 @@ def test_memory_log_text_filters_to_presets(tmp_path: Path) -> None:
     assert "History One" not in text
 
 
-def test_set_log_memory_presets_resets_label_and_index(tmp_path: Path) -> None:
+def test_set_log_memory_presets_preserves_search_context(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory_filter = "history"
     app.memory_label = "ops"
+    app.memory_query = "night"
+    app.memory_all_folders = True
     app.memory_index = 3
     app._sync_button_state = lambda: None  # type: ignore[method-assign]
     app._render_selected = lambda: None  # type: ignore[method-assign]
     app.action_set_log_memory_presets()
     assert app.log_kind == "memory"
     assert app.memory_filter == "presets"
-    assert app.memory_label is None
+    assert app.memory_label == "ops"
+    assert app.memory_query == "night"
+    assert app.memory_all_folders is True
     assert app.memory_index == 0
 
 
