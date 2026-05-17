@@ -554,8 +554,9 @@ def main() -> None:
 
         if args.command == "check-task-file":
             path = args.path.expanduser().resolve()
+            app_config = load_app_config(args.config)
             try:
-                task_state = parse_task_file(path)
+                task_state = parse_task_file(path, app_config.tasks.max_doing)
             except Exception as exc:
                 if args.json:
                     print_json({"ok": False, "path": str(path), "error": str(exc)})
