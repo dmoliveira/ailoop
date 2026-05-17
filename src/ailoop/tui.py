@@ -344,7 +344,7 @@ class LoopDashboard(App[None]):
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
         if actual_width and actual_width <= 80:
-            return "nav ↑↓ · g/a/l · logs 1/2/3/4/5/6/7/m/0 · r · q"
+            return "↑↓ g/a/l 1-7/m/0 r q"
         return "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
 
     def _memory_help_text(self, width: int | None = None) -> str:
@@ -386,9 +386,9 @@ class LoopDashboard(App[None]):
         labels = len(self._memory_labels())
         if compact:
             return (
-                f"{base} · mem {self.memory_filter} · lbl {self.memory_label or '-'} · "
-                f"q {self.memory_query or '-'} · {self._memory_scope_text()} · "
-                f"{entries} ent · {labels}/{label_count} lab · {action_text}"
+                f"{base} · {self.memory_filter} {self.memory_label or '-'} "
+                f"{self.memory_query or '-'} "
+                f"{self._memory_scope_text()} {entries}e {labels}/{label_count}l {action_text}"
             )
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
