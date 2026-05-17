@@ -292,9 +292,10 @@ class LoopDashboard(App[None]):
     def _summary_selected_text(self, state: object | None) -> str:
         if self.log_kind == "memory":
             entry = self._primary_memory_entry()
+            label_count = len(self._memory_labels())
             if entry is None:
-                return f"memory {self.memory_filter} · selected none"
-            return f"memory {self.memory_filter} · selected {entry.id}"
+                return f"memory {self.memory_filter} · labels {label_count} · selected none"
+            return f"memory {self.memory_filter} · labels {label_count} · selected {entry.id}"
         if state is None:
             return "selected none"
         return f"selected {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
@@ -313,8 +314,11 @@ class LoopDashboard(App[None]):
             memory_actions.append("x confirm")
         action_text = " · ".join(memory_actions) if memory_actions else "read only"
         base = "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7 · r refresh · q quit"
+        entries = len(self._memory_entries())
+        labels = len(self._memory_labels())
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
+            f"entries {entries} · labels {labels} · "
             f"actions {action_text}"
         )
 
