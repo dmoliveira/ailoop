@@ -44,6 +44,18 @@ ailoop ps
 ailoop tail <loop-id>
 ```
 
+TUI memory smoke:
+
+```bash
+bash ./scripts/tui_memory_smoke.sh
+tmux attach -t ailoop-tui-smoke
+```
+
+Inside the TUI:
+- press `5`, `6`, `7`, or `0`
+- use `[` and `]` to move between memory entries
+- use `8`, `9`, `v`, `z`, and `x` to exercise replay/favorite/restore/archive/delete
+
 JSON:
 
 ```bash

@@ -182,6 +182,13 @@ ailoop logs <loop-id>
 ailoop tail <loop-id>
 ```
 
+TUI memory smoke:
+
+```bash
+bash ./scripts/tui_memory_smoke.sh
+tmux attach -t ailoop-tui-smoke
+```
+
 Task files:
 
 ```bash
