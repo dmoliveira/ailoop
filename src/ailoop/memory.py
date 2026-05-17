@@ -354,12 +354,16 @@ def render_memory_list(entries: list[MemoryEntry]) -> str:
     if not entries:
         return "No memory entries found."
     lines = [
-        "ID             Kind     Fav  Title",
-        "-------------  -------  ---  -----",
+        "ID             Kind     Fav  Used  Labels       Title",
+        "-------------  -------  ---  ----  -----------  -----",
     ]
     for entry in entries:
         star = "★" if entry.favorite else "-"
-        lines.append(f"{entry.id:<13}  {entry.kind:<7}  {star:<3}  {entry.title}")
+        labels = ",".join(entry.labels[:2]) or "-"
+        lines.append(
+            f"{entry.id:<13}  {entry.kind:<7}  {star:<3}  {entry.use_count:<4}  "
+            f"{labels:<11}  {entry.title}"
+        )
     return "\n".join(lines)
 
 
