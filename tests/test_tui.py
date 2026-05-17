@@ -309,6 +309,9 @@ def test_summary_selected_text_uses_memory_entry_when_memory_mode_active(tmp_pat
     text = app._memory_detail_text()
     assert "active label: ops" in text
     assert "available labels: 1" in text
+    assert "b previous label" in text
+    assert "n next label" in text
+    assert "c clear label" in text
 
 
 def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> None:
@@ -374,6 +377,9 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     assert "memory all" in text
     assert "entries 1" in text
     assert "labels 0/0" in text
+    assert "b label<" in text
+    assert "n label>" in text
+    assert "c labelx" in text
     assert "8 replay" in text
     assert "no loop selected" not in text
 
