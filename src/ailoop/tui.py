@@ -174,6 +174,7 @@ class LoopDashboard(App[None]):
         ("b", "memory_label_prev", "Prev Label"),
         ("n", "memory_label_next", "Next Label"),
         ("c", "memory_label_clear", "Clear Label"),
+        ("o", "memory_scope_toggle", "Toggle Memory Scope"),
         ("/", "memory_query_focus", "Focus Query"),
         ("escape", "memory_query_clear", "Clear Query"),
         ("8", "memory_replay", "Replay Memory"),
@@ -193,6 +194,7 @@ class LoopDashboard(App[None]):
     log_kind: reactive[LogKind] = reactive("stdout")
     memory_filter: reactive[MemoryFilter] = reactive("all")
     memory_label: reactive[str | None] = reactive(None)
+    memory_all_folders: reactive[bool] = reactive(False)
     memory_query: reactive[str] = reactive("")
     memory_index: reactive[int] = reactive(0)
     memory_archive_armed: reactive[bool] = reactive(False)
@@ -248,6 +250,7 @@ class LoopDashboard(App[None]):
                     yield Button("b label<", id="memory-label-prev")
                     yield Button("n label>", id="memory-label-next")
                     yield Button("c labelx", id="memory-label-clear")
+                    yield Button("o scope", id="memory-scope-toggle")
                     yield Button("8 replay", id="memory-replay")
                     yield Button("9 favorite", id="memory-favorite")
                     yield Button("v restore", id="memory-restore")
@@ -317,6 +320,7 @@ class LoopDashboard(App[None]):
                     "b label<",
                     "n label>",
                     "c labelx",
+                    "o scope",
                     "/ query",
                     "esc queryx",
                     "8 replay",
@@ -337,7 +341,8 @@ class LoopDashboard(App[None]):
         labels = len(self._memory_labels())
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
-            f"query {self.memory_query or '-'} · entries {entries} · "
+            f"query {self.memory_query or '-'} · "
+            f"scope {self._memory_scope_text()} · entries {entries} · "
             f"labels {labels}/{label_count} · "
             f"actions {action_text}"
         )
@@ -363,6 +368,7 @@ class LoopDashboard(App[None]):
             "log-memory-history": self.log_kind == "memory" and self.memory_filter == "history",
             "log-memory-presets": self.log_kind == "memory" and self.memory_filter == "presets",
             "log-memory-archived": self.log_kind == "memory" and self.memory_filter == "archived",
+            "memory-scope-toggle": self.log_kind == "memory" and self.memory_all_folders,
         }.items():
             self.query_one(f"#{button_id}", Button).set_class(active, "active")
         self.query_one("#pause", Button).disabled = not can_pause
@@ -479,19 +485,36 @@ class LoopDashboard(App[None]):
         return entries
 
     def _memory_entries_base(self):
+        folder = None if self.memory_all_folders else Path.cwd()
         if self.memory_filter == "favorites":
-            return self.memory.list_entries(folder=Path.cwd(), favorites_only=True)
+            return self.memory.list_entries(
+                folder=folder,
+                favorites_only=True,
+                all_folders=self.memory_all_folders,
+            )
         if self.memory_filter == "history":
-            return self.memory.list_entries(folder=Path.cwd(), kind="history")
+            return self.memory.list_entries(
+                folder=folder,
+                kind="history",
+                all_folders=self.memory_all_folders,
+            )
         if self.memory_filter == "presets":
-            return self.memory.list_entries(folder=Path.cwd(), kind="preset")
+            return self.memory.list_entries(
+                folder=folder,
+                kind="preset",
+                all_folders=self.memory_all_folders,
+            )
         if self.memory_filter == "archived":
             return [
                 entry
-                for entry in self.memory.list_entries(folder=Path.cwd(), include_archived=True)
+                for entry in self.memory.list_entries(
+                    folder=folder,
+                    include_archived=True,
+                    all_folders=self.memory_all_folders,
+                )
                 if entry.archived
             ]
-        return self.memory.list_entries(folder=Path.cwd())
+        return self.memory.list_entries(folder=folder, all_folders=self.memory_all_folders)
 
     def _memory_labels(self) -> list[str]:
         return sorted({label for entry in self._memory_entries_base() for label in entry.labels})
@@ -516,8 +539,11 @@ class LoopDashboard(App[None]):
             f"source memory · filter {self.memory_filter} · label {self.memory_label or '-'} · "
             f"query {self.memory_query or '-'} · "
             f"selected {selected}/{len(entries)} · "
-            f"favorites {favorites} · scope cwd"
+            f"favorites {favorites} · scope {self._memory_scope_text()}"
         )
+
+    def _memory_scope_text(self) -> str:
+        return "all-folders" if self.memory_all_folders else "cwd"
 
     def _memory_log_text(self) -> str:
         entries = self._memory_entries()
@@ -539,9 +565,12 @@ class LoopDashboard(App[None]):
             return "\n".join(lines)
         return (
             "No memory entries found.\n\n"
+            f"scope: {self._memory_scope_text()} · filter: {self.memory_filter} · "
+            f"label: {self.memory_label or '-'} · query: {self.memory_query or '-'}\n"
             "Create one with:\n"
             '  ailoop memory save "Quick review" "Review the repo" --runner opencode\n\n'
-            f"Then press {self._memory_filter_hint()} to refresh this list."
+            f"Then press {self._memory_filter_hint()} to refresh this list. "
+            f"Press o to {self._memory_scope_toggle_hint()}."
         )
 
     def _memory_filter_hint(self) -> str:
@@ -552,6 +581,9 @@ class LoopDashboard(App[None]):
             "presets": "m",
             "archived": "0",
         }[self.memory_filter]
+
+    def _memory_scope_toggle_hint(self) -> str:
+        return "return to cwd scope" if self.memory_all_folders else "show all folders"
 
     def _memory_detail_text(self) -> str:
         entry = self._primary_memory_entry()
@@ -580,6 +612,7 @@ class LoopDashboard(App[None]):
                 f"archived: {entry.archived}",
                 f"labels: {', '.join(entry.labels) or '-'}",
                 f"active label: {self.memory_label or '-'}",
+                f"scope: {self._memory_scope_text()}",
                 f"query: {self.memory_query or '-'}",
                 f"available labels: {len(self._memory_labels())}",
                 "",
@@ -605,6 +638,7 @@ class LoopDashboard(App[None]):
                 "b previous label",
                 "n next label",
                 "c clear label",
+                "o toggle scope",
                 "/ focus query",
                 "esc clear query",
                 "8 replay top entry",
@@ -787,6 +821,8 @@ class LoopDashboard(App[None]):
             self.action_memory_label_next()
         elif button_id == "memory-label-clear":
             self.action_memory_label_clear()
+        elif button_id == "memory-scope-toggle":
+            self.action_memory_scope_toggle()
         elif button_id == "memory-replay":
             self.action_memory_replay()
         elif button_id == "memory-favorite":
@@ -985,6 +1021,16 @@ class LoopDashboard(App[None]):
 
     def action_memory_label_clear(self) -> None:
         self.memory_label = None
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
+        self.memory_index = 0
+        self._sync_button_state()
+        self._render_selected()
+
+    def action_memory_scope_toggle(self) -> None:
+        if self.log_kind != "memory":
+            return
+        self.memory_all_folders = not self.memory_all_folders
         self.memory_archive_armed = False
         self.memory_delete_armed = False
         self.memory_index = 0
