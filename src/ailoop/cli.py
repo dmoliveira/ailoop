@@ -543,6 +543,37 @@ def _resolve_memory_run_config(args: argparse.Namespace, app_config) -> object:
     )
 
 
+def _friendly_not_found_message(args: argparse.Namespace, exc: FileNotFoundError) -> str:
+    if args.command == "memory":
+        entry_id = getattr(args, "entry_id", None)
+        if entry_id:
+            return "\n".join(
+                [
+                    f"Memory entry not found: {entry_id}",
+                    "Try: ailoop memory list --all-folders",
+                ]
+            )
+    if args.command == "replay":
+        return "\n".join(
+            [
+                f"Memory entry not found: {args.entry_id}",
+                "Try: ailoop memory list --all-folders",
+            ]
+        )
+    loop_id = getattr(args, "loop_id", None)
+    if (
+        args.command in {"resume", "pause", "stop", "status", "stats", "logs", "tail", "remove"}
+        and loop_id
+    ):
+        return "\n".join(
+            [
+                f"Loop not found: {loop_id}",
+                "Try: ailoop list",
+            ]
+        )
+    return str(exc)
+
+
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args(normalize_global_args(sys.argv[1:]))
@@ -806,6 +837,12 @@ def main() -> None:
             service.remove_loop(args.loop_id, force=args.force)
             print(f"Removed loop: {args.loop_id}")
             return
+    except FileNotFoundError as exc:
+        if args.json:
+            print_json({"ok": False, "error": str(exc)})
+        else:
+            print(_friendly_not_found_message(args, exc))
+        raise SystemExit(1) from exc
     finally:
         set_color_mode(previous_color_mode)
 

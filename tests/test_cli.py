@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from ailoop.cli import main
 from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig, LoopState
@@ -565,6 +567,34 @@ def test_memory_list_empty_output_includes_scope_guidance(
     assert 'ailoop memory save "Quick review" "Review the repo" --runner opencode' in out
 
 
+def test_memory_show_missing_entry_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "show", "missing-entry"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "Memory entry not found: missing-entry" in out
+    assert "ailoop memory list --all-folders" in out
+
+
+def test_status_missing_loop_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "status", "missing-loop"],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "Loop not found: missing-loop" in out
+    assert "ailoop list" in out
+
+
 def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 
@@ -659,12 +689,12 @@ def test_memory_show_rejects_out_of_scope_entry(capsys, monkeypatch, tmp_path: P
         "sys.argv",
         ["ailoop", "--config", str(config_path), "memory", "show", saved["id"]],
     )
-    try:
+    with pytest.raises(SystemExit) as exc:
         main()
-    except FileNotFoundError as exc:
-        assert saved["id"] in str(exc)
-    else:
-        raise AssertionError("expected out-of-scope lookup to fail")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert f"Memory entry not found: {saved['id']}" in out
+    assert "ailoop memory list --all-folders" in out
 
 
 def test_replay_failure_does_not_mark_used(capsys, monkeypatch, tmp_path: Path) -> None:
