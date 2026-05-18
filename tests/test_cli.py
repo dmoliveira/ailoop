@@ -581,7 +581,7 @@ def test_memory_list_empty_output_includes_scope_guidance(
     assert "No memory entries found." in out
     assert "scope: current folder" in out
     assert "ailoop memory list --all-folders" in out
-    assert 'ailoop memory save "Quick review" "Review the repo" --runner opencode' in out
+    assert 'ailoop memory save "Quick review" "Review the repo"' in out
 
 
 def test_memory_show_missing_entry_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:

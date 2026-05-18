@@ -54,6 +54,9 @@ def test_memory_mode_tolerates_missing_launch_cwd(monkeypatch, tmp_path: Path) -
     app.memory = memory
     app.log_kind = "memory"
     assert app.launch_cwd is None
+    assert app.memory_all_folders is True
+    assert app._can_toggle_memory_scope() is False
+    assert app._memory_scope_text() == "all-folders (cwd unavailable)"
     assert entry.id in app._memory_log_text()
 
 
@@ -1045,8 +1048,9 @@ def test_memory_replay_uses_top_filtered_entry(monkeypatch, tmp_path: Path) -> N
     )
     seen = {}
 
-    def fake_popen(command, stdout, stderr, start_new_session):  # type: ignore[no-untyped-def]
+    def fake_popen(command, cwd, stdout, stderr, start_new_session):  # type: ignore[no-untyped-def]
         seen["command"] = command
+        seen["cwd"] = cwd
         seen["stdout"] = stdout
         seen["stderr"] = stderr
         seen["start_new_session"] = start_new_session
@@ -1062,6 +1066,59 @@ def test_memory_replay_uses_top_filtered_entry(monkeypatch, tmp_path: Path) -> N
     app.action_memory_replay()
     command = seen["command"]
     assert command[-2:] == ["replay", entry.id]
+    assert seen["cwd"] == app.launch_cwd
+
+
+def test_memory_replay_uses_safe_fallback_cwd_when_launch_cwd_is_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="history",
+        title="Replay me safely",
+        run_config=run_config,
+        folder=tmp_path / "missing-cwd-source",
+        favorite=False,
+    )
+    seen = {}
+
+    def fake_popen(command, cwd, stdout, stderr, start_new_session):  # type: ignore[no-untyped-def]
+        seen["command"] = command
+        seen["cwd"] = cwd
+        seen["stdout"] = stdout
+        seen["stderr"] = stderr
+        seen["start_new_session"] = start_new_session
+        return subprocess.Popen  # type: ignore[return-value]
+
+    def missing_getcwd() -> str:
+        raise FileNotFoundError
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr("os.getcwd", missing_getcwd)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_filter = "history"
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    app.action_memory_replay()
+    assert seen["command"][-2:] == ["replay", entry.id]
+    assert seen["cwd"] == Path.home()
 
 
 def test_memory_selection_moves_to_next_entry(tmp_path: Path) -> None:
@@ -1295,7 +1352,7 @@ def test_memory_detail_text_uses_memory_specific_empty_state(tmp_path: Path) -> 
     text = app._memory_detail_text()
     assert "memory overview" in text
     assert "no memory entry is selected" in text
-    assert "press 5 to refresh this filter" in text.lower()
+    assert "press 5 to switch this view" in text.lower()
 
 
 def test_memory_detail_text_uses_archived_empty_state(tmp_path: Path) -> None:
