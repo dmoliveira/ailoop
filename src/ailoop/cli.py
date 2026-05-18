@@ -631,7 +631,7 @@ def main() -> None:
                 if args.json:
                     print_json([entry.to_dict() for entry in entries])
                 elif not args.quiet:
-                    print(render_memory_list(entries))
+                    print(render_memory_list(entries, all_folders=args.all_folders))
                 return
 
             if args.memory_command == "show":

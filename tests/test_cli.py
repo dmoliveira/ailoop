@@ -549,6 +549,22 @@ def test_memory_list_all_folders_expands_scope(capsys, monkeypatch, tmp_path: Pa
     assert [entry["id"] for entry in expanded] == [second["id"], first["id"]]
 
 
+def test_memory_list_empty_output_includes_scope_guidance(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "list"],
+    )
+    main()
+    out = capsys.readouterr().out
+    assert "No memory entries found." in out
+    assert "scope: current folder" in out
+    assert "ailoop memory list --all-folders" in out
+    assert 'ailoop memory save "Quick review" "Review the repo" --runner opencode' in out
+
+
 def test_replay_uses_saved_entry_and_marks_used(capsys, monkeypatch, tmp_path: Path) -> None:
     config_path = write_test_config(tmp_path)
 
