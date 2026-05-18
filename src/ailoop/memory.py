@@ -370,7 +370,7 @@ def render_memory_list(entries: list[MemoryEntry], *, all_folders: bool = False)
                 "",
                 f"scope: {scope_text}",
                 "Try:",
-                '  ailoop memory save "Quick review" "Review the repo" --runner opencode',
+                '  ailoop memory save "Quick review" "Review the repo"',
                 f"  ailoop {next_filter}" if not all_folders else "  ailoop memory list",
             ]
         )

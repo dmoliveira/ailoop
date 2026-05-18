@@ -308,6 +308,7 @@ class LoopDashboard(App[None]):
             self.launch_cwd = Path(os.getcwd())
         except FileNotFoundError:
             self.launch_cwd = None
+            self.memory_all_folders = True
         self.initial_loop_id = loop_id
         if loop_id is not None:
             self.filter_mode = "all"
@@ -316,6 +317,9 @@ class LoopDashboard(App[None]):
         if self.memory_all_folders:
             return None
         return self.launch_cwd
+
+    def _can_toggle_memory_scope(self) -> bool:
+        return self.launch_cwd is not None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -474,7 +478,7 @@ class LoopDashboard(App[None]):
                     "b label<",
                     "n label>",
                     "c labelx",
-                    "o scope",
+                    *(["o scope"] if self._can_toggle_memory_scope() else []),
                     "/ query",
                     "esc queryx",
                     "8 replay",
@@ -708,7 +712,15 @@ class LoopDashboard(App[None]):
         )
 
     def _memory_scope_text(self) -> str:
+        if self.launch_cwd is None:
+            return "all-folders (cwd unavailable)"
         return "all-folders" if self.memory_all_folders else "cwd"
+
+    def _memory_scope_instruction(self, *, lowercase: bool = False) -> str:
+        if self.launch_cwd is None:
+            return "cwd scope unavailable; showing all folders"
+        prefix = "press" if lowercase else "Press"
+        return f"{prefix} o to {self._memory_scope_toggle_hint()}"
 
     def _memory_log_text(self) -> str:
         entries = self._memory_entries()
@@ -734,16 +746,16 @@ class LoopDashboard(App[None]):
                 f"scope: {self._memory_scope_text()} · label: {self.memory_label or '-'} · "
                 f"query: {self.memory_query or '-'}\n"
                 "Archive one from the memory list with z twice, or press 5 for all entries.\n"
-                f"Press o to {self._memory_scope_toggle_hint()}."
+                f"{self._memory_scope_instruction()}."
             )
         return (
             "No memory entries found.\n\n"
             f"scope: {self._memory_scope_text()} · filter: {self.memory_filter} · "
             f"label: {self.memory_label or '-'} · query: {self.memory_query or '-'}\n"
             "Create one with:\n"
-            '  ailoop memory save "Quick review" "Review the repo" --runner opencode\n\n'
-            f"Then press {self._memory_filter_hint()} to refresh this list. "
-            f"Press o to {self._memory_scope_toggle_hint()}."
+            '  ailoop memory save "Quick review" "Review the repo"\n\n'
+            f"Then press {self._memory_filter_hint()} to switch this view. "
+            f"{self._memory_scope_instruction()}."
         )
 
     def _memory_filter_hint(self) -> str:
@@ -773,7 +785,7 @@ class LoopDashboard(App[None]):
                     "no archived entries match this view",
                     "archive one from memory mode with z twice",
                     "press 5 to return to all entries",
-                    f"press o to {self._memory_scope_toggle_hint()}",
+                    self._memory_scope_instruction(lowercase=True),
                 ]
             )
         else:
@@ -781,8 +793,8 @@ class LoopDashboard(App[None]):
                 [
                     "no memory entry is selected",
                     "save one with ailoop memory save ...",
-                    f"press {self._memory_filter_hint()} to refresh this filter",
-                    f"press o to {self._memory_scope_toggle_hint()}",
+                    f"press {self._memory_filter_hint()} to switch this view",
+                    self._memory_scope_instruction(lowercase=True),
                 ]
             )
         return "\n".join(lines)
@@ -1043,6 +1055,9 @@ class LoopDashboard(App[None]):
         self._render_summary_bar()
         self._render_selected()
 
+    def _spawn_cwd(self) -> Path:
+        return self.launch_cwd or Path.home()
+
     def _spawn_resume(self, loop_id: str) -> None:
         subprocess.Popen(
             [
@@ -1055,6 +1070,7 @@ class LoopDashboard(App[None]):
                 "resume",
                 loop_id,
             ],
+            cwd=self._spawn_cwd(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -1072,6 +1088,7 @@ class LoopDashboard(App[None]):
                 "replay",
                 entry_id,
             ],
+            cwd=self._spawn_cwd(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
@@ -1196,6 +1213,14 @@ class LoopDashboard(App[None]):
 
     def action_memory_scope_toggle(self) -> None:
         if self.log_kind != "memory":
+            return
+        if not self._can_toggle_memory_scope():
+            self.memory_all_folders = True
+            self.memory_archive_armed = False
+            self.memory_delete_armed = False
+            self.notify("cwd scope unavailable; showing all folders")
+            self._sync_button_state()
+            self._render_selected()
             return
         self.memory_all_folders = not self.memory_all_folders
         self.memory_archive_armed = False
