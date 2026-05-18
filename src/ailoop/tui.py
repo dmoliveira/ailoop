@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shlex
 import subprocess
 import sys
@@ -27,8 +28,12 @@ COMPACT_LAYOUT_WIDTH = 100
 
 
 def launch_in_tmux(config_path: Path, loop_id: str | None = None) -> None:
+    try:
+        launch_dir = Path.cwd()
+    except FileNotFoundError:
+        launch_dir = Path.home()
     command_text = (
-        f"cd {shlex.quote(str(Path.cwd()))} && {shlex.quote(sys.executable)} -m ailoop.cli "
+        f"cd {shlex.quote(str(launch_dir))} && {shlex.quote(sys.executable)} -m ailoop.cli "
         f"--config {shlex.quote(str(config_path))} tui --tmux-session"
     ) + (f" --loop-id {shlex.quote(loop_id)}" if loop_id else "")
     command = [
@@ -299,9 +304,18 @@ class LoopDashboard(App[None]):
         app_config = load_app_config(config_path)
         self.service = LoopService(Path(app_config.paths.state_dir), emit_output=False)
         self.memory = MemoryStore(Path(app_config.paths.state_dir))
+        try:
+            self.launch_cwd = Path(os.getcwd())
+        except FileNotFoundError:
+            self.launch_cwd = None
         self.initial_loop_id = loop_id
         if loop_id is not None:
             self.filter_mode = "all"
+
+    def _memory_folder(self) -> Path | None:
+        if self.memory_all_folders:
+            return None
+        return self.launch_cwd
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -636,7 +650,7 @@ class LoopDashboard(App[None]):
         return entries
 
     def _memory_entries_base(self):
-        folder = None if self.memory_all_folders else Path.cwd()
+        folder = self._memory_folder()
         if self.memory_filter == "favorites":
             return self.memory.list_entries(
                 folder=folder,
@@ -1224,7 +1238,11 @@ class LoopDashboard(App[None]):
             return
         self.memory_archive_armed = False
         self.memory_delete_armed = False
-        updated = self.memory.edit(entry.id, favorite=not entry.favorite, folder=Path.cwd())
+        updated = self.memory.edit(
+            entry.id,
+            favorite=not entry.favorite,
+            folder=self._memory_folder(),
+        )
         state = "favorite on" if updated.favorite else "favorite off"
         self.notify(f"{state}: {updated.id}")
         self.refresh_data()
@@ -1235,7 +1253,7 @@ class LoopDashboard(App[None]):
             return
         self.memory_archive_armed = False
         self.memory_delete_armed = False
-        self.memory.edit(entry.id, archived=False, folder=Path.cwd())
+        self.memory.edit(entry.id, archived=False, folder=self._memory_folder())
         self.notify(f"memory restored: {entry.id}")
         self.refresh_data()
 
@@ -1249,7 +1267,7 @@ class LoopDashboard(App[None]):
             self.notify(f"press z again to archive memory: {entry.id}")
             self._sync_button_state()
             return
-        self.memory.edit(entry.id, archived=True, folder=Path.cwd())
+        self.memory.edit(entry.id, archived=True, folder=self._memory_folder())
         self.memory_archive_armed = False
         self.memory_index = 0
         self.notify(f"memory archived: {entry.id}")
@@ -1265,7 +1283,7 @@ class LoopDashboard(App[None]):
             self.notify(f"press x again to delete memory: {entry.id}")
             self._sync_button_state()
             return
-        self.memory.delete(entry.id, folder=Path.cwd())
+        self.memory.delete(entry.id, folder=self._memory_folder())
         self.memory_delete_armed = False
         self.memory_index = 0
         self.notify(f"memory deleted: {entry.id}")

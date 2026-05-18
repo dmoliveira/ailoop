@@ -21,6 +21,42 @@ def test_render_progress_text_uses_bar_for_finite_targets() -> None:
     assert render_progress_text(2, None) == "∞ 2"
 
 
+def test_memory_mode_tolerates_missing_launch_cwd(monkeypatch, tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    entry = memory.create(
+        kind="preset",
+        title="Fallback entry",
+        run_config=run_config,
+        folder=tmp_path / "missing-cwd-source",
+        favorite=False,
+    )
+
+    def missing_getcwd() -> str:
+        raise FileNotFoundError
+
+    monkeypatch.setattr("os.getcwd", missing_getcwd)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    assert app.launch_cwd is None
+    assert entry.id in app._memory_log_text()
+
+
 def test_tui_mounts_and_loads_loop(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
