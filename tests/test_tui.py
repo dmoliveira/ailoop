@@ -57,6 +57,7 @@ def test_memory_mode_tolerates_missing_launch_cwd(monkeypatch, tmp_path: Path) -
     assert app.memory_all_folders is True
     assert app._can_toggle_memory_scope() is False
     assert app._memory_scope_text() == "all-folders (cwd unavailable)"
+    assert app._memory_scope_text(compact=True) == "all*"
     assert entry.id in app._memory_log_text()
 
 
@@ -1118,6 +1119,28 @@ def test_memory_replay_uses_safe_fallback_cwd_when_launch_cwd_is_missing(
     app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
     app.action_memory_replay()
     assert seen["command"][-2:] == ["replay", entry.id]
+    assert seen["cwd"] == Path.home()
+
+
+def test_resume_uses_safe_fallback_cwd_when_launch_cwd_is_missing(monkeypatch) -> None:
+    seen = {}
+
+    def fake_popen(command, cwd, stdout, stderr, start_new_session):  # type: ignore[no-untyped-def]
+        seen["command"] = command
+        seen["cwd"] = cwd
+        seen["stdout"] = stdout
+        seen["stderr"] = stderr
+        seen["start_new_session"] = start_new_session
+        return subprocess.Popen  # type: ignore[return-value]
+
+    def missing_getcwd() -> str:
+        raise FileNotFoundError
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr("os.getcwd", missing_getcwd)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app._spawn_resume("loop-123")
+    assert seen["command"][-2:] == ["resume", "loop-123"]
     assert seen["cwd"] == Path.home()
 
 
