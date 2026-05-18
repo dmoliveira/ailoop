@@ -741,8 +741,8 @@ class LoopDashboard(App[None]):
             f"scope: {self._memory_scope_text()} · filter: {self.memory_filter} · "
             f"label: {self.memory_label or '-'} · query: {self.memory_query or '-'}\n"
             "Create one with:\n"
-            '  ailoop memory save "Quick review" "Review the repo"\n\n'
-            f"Then press {self._memory_filter_hint()} to switch this view. "
+            '  ailoop memory save "Quick review" "Review the repo" --runner opencode\n\n'
+            f"Then press {self._memory_filter_hint()} to refresh this list. "
             f"Press o to {self._memory_scope_toggle_hint()}."
         )
 
@@ -781,7 +781,7 @@ class LoopDashboard(App[None]):
                 [
                     "no memory entry is selected",
                     "save one with ailoop memory save ...",
-                    f"press {self._memory_filter_hint()} to switch this view",
+                    f"press {self._memory_filter_hint()} to refresh this filter",
                     f"press o to {self._memory_scope_toggle_hint()}",
                 ]
             )
