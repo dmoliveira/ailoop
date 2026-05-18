@@ -360,9 +360,20 @@ class MemoryStore:
         return entry
 
 
-def render_memory_list(entries: list[MemoryEntry]) -> str:
+def render_memory_list(entries: list[MemoryEntry], *, all_folders: bool = False) -> str:
     if not entries:
-        return "No memory entries found."
+        scope_text = "all folders" if all_folders else "current folder"
+        next_filter = "memory list --all-folders" if not all_folders else "memory save"
+        return "\n".join(
+            [
+                "No memory entries found.",
+                "",
+                f"scope: {scope_text}",
+                "Try:",
+                '  ailoop memory save "Quick review" "Review the repo" --runner opencode',
+                f"  ailoop {next_filter}" if not all_folders else "  ailoop memory list",
+            ]
+        )
     lines = [
         "ID             Kind     Fav  Used  Labels       Title",
         "-------------  -------  ---  ----  -----------  -----",
