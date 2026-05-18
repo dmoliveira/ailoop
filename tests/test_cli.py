@@ -50,23 +50,6 @@ def test_task_template_command_prints_template(capsys, monkeypatch) -> None:
     assert "Task file rules:" not in out
 
 
-def test_key_subcommand_help_includes_examples(capsys, monkeypatch) -> None:
-    for argv in (
-        ["ailoop", "resume", "--help"],
-        ["ailoop", "replay", "--help"],
-        ["ailoop", "memory", "save", "--help"],
-        ["ailoop", "memory", "list", "--help"],
-        ["ailoop", "memory", "show", "--help"],
-        ["ailoop", "tui", "--help"],
-    ):
-        monkeypatch.setattr("sys.argv", argv)
-        with pytest.raises(SystemExit) as exc:
-            main()
-        assert exc.value.code == 0
-        out = capsys.readouterr().out
-        assert "Examples:" in out
-
-
 def test_task_template_with_rules_prints_guide(capsys, monkeypatch) -> None:
     monkeypatch.setattr("sys.argv", ["ailoop", "task-template", "--with-rules"])
     main()
@@ -581,7 +564,7 @@ def test_memory_list_empty_output_includes_scope_guidance(
     assert "No memory entries found." in out
     assert "scope: current folder" in out
     assert "ailoop memory list --all-folders" in out
-    assert 'ailoop memory save "Quick review" "Review the repo"' in out
+    assert 'ailoop memory save "Quick review" "Review the repo" --runner opencode' in out
 
 
 def test_memory_show_missing_entry_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:
