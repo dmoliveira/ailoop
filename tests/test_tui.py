@@ -1295,7 +1295,7 @@ def test_memory_detail_text_uses_memory_specific_empty_state(tmp_path: Path) -> 
     text = app._memory_detail_text()
     assert "memory overview" in text
     assert "no memory entry is selected" in text
-    assert "press 5 to refresh this filter" in text.lower()
+    assert "press 5 to switch this view" in text.lower()
 
 
 def test_memory_detail_text_uses_archived_empty_state(tmp_path: Path) -> None:

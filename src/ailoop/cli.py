@@ -203,14 +203,26 @@ def build_parser() -> argparse.ArgumentParser:
     resume_parser = subparsers.add_parser(
         "resume",
         help="Resume a loop",
-        description="Resume a previously paused or stopped loop.",
+        description=(
+            "Resume a previously paused or stopped loop.\n\n"
+            "Examples:\n"
+            "  ailoop resume <loop-id>\n"
+            "  ailoop status <loop-id>"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     resume_parser.add_argument("loop_id", help="Loop id to resume")
 
     replay_parser = subparsers.add_parser(
         "replay",
         help="Replay a saved memory entry",
-        description="Create and run a new loop from a saved preset or history entry.",
+        description=(
+            "Create and run a new loop from a saved preset or history entry.\n\n"
+            "Examples:\n"
+            "  ailoop replay <memory-id>\n"
+            "  ailoop replay <memory-id> --loop-id review-pass"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     replay_parser.add_argument("entry_id", help="Saved memory entry id")
     replay_parser.add_argument("--loop-id", help="Optional custom loop id")
@@ -225,7 +237,13 @@ def build_parser() -> argparse.ArgumentParser:
     memory_save = memory_subparsers.add_parser(
         "save",
         help="Save a memory entry",
-        description="Save a preset or history entry from run-style configuration flags.",
+        description=(
+            "Save a preset or history entry from run-style configuration flags.\n\n"
+            "Examples:\n"
+            '  ailoop memory save "Quick review" "Review the repo" --runner opencode\n'
+            '  ailoop memory save "Nightly ops" "Check the repo" --label ops --favorite'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     memory_save.add_argument("title", help="Entry title")
     memory_save.add_argument("prompt", help="Prompt to save")
@@ -262,7 +280,14 @@ def build_parser() -> argparse.ArgumentParser:
     memory_list = memory_subparsers.add_parser(
         "list",
         help="List memory entries",
-        description="List saved presets and history entries.",
+        description=(
+            "List saved presets and history entries.\n\n"
+            "Examples:\n"
+            "  ailoop memory list\n"
+            "  ailoop memory list --favorites\n"
+            "  ailoop memory list --all-folders --query nightly"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     memory_list.add_argument("--kind", choices=["all", "preset", "history"], default="all")
     memory_list.add_argument("--favorites", action="store_true", help="Show only favorite entries")
@@ -283,7 +308,13 @@ def build_parser() -> argparse.ArgumentParser:
     memory_show = memory_subparsers.add_parser(
         "show",
         help="Show one memory entry",
-        description="Show one saved preset or history entry.",
+        description=(
+            "Show one saved preset or history entry.\n\n"
+            "Examples:\n"
+            "  ailoop memory show <memory-id>\n"
+            "  ailoop memory show <memory-id> --json"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     memory_show.add_argument("entry_id", help="Saved memory entry id")
 
@@ -399,7 +430,14 @@ def build_parser() -> argparse.ArgumentParser:
     tui_parser = subparsers.add_parser(
         "tui",
         help="Open the interactive dashboard",
-        description="Open the interactive dashboard with loops, logs, and controls.",
+        description=(
+            "Open the interactive dashboard with loops, logs, and controls.\n\n"
+            "Examples:\n"
+            "  ailoop tui\n"
+            "  ailoop tui --tmux\n"
+            "  ailoop tui --loop-id <loop-id>"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     tui_parser.add_argument("--loop-id", help="Preselect a loop id")
     tui_parser.add_argument(
