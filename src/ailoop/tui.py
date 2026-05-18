@@ -506,7 +506,8 @@ class LoopDashboard(App[None]):
             return (
                 f"{base} · {self.memory_filter} {self.memory_label or '-'} "
                 f"{self.memory_query or '-'} "
-                f"{self._memory_scope_text()} {entries}e {labels}/{label_count}l {action_text}"
+                f"{self._memory_scope_text(compact=True)} "
+                f"{entries}e {labels}/{label_count}l {action_text}"
             )
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
@@ -711,8 +712,10 @@ class LoopDashboard(App[None]):
             f"favorites {favorites} · scope {self._memory_scope_text()}"
         )
 
-    def _memory_scope_text(self) -> str:
+    def _memory_scope_text(self, *, compact: bool = False) -> str:
         if self.launch_cwd is None:
+            if compact:
+                return "all*"
             return "all-folders (cwd unavailable)"
         return "all-folders" if self.memory_all_folders else "cwd"
 
