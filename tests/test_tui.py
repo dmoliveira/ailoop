@@ -1274,6 +1274,57 @@ def test_missing_cwd_tui_flow_keeps_safe_cwd_for_replay_and_resume(
     assert all(call["cwd"] == Path.home() for call in calls)
 
 
+def test_selected_loop_shows_friendly_task_file_error(tmp_path: Path) -> None:
+    bad_task_file = tmp_path / "bad-tasks.md"
+    bad_task_file.write_text("# Loop Tasks\n\n## To do\n- None\n")
+    service = LoopService(tmp_path / "state")
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+        task_file=str(bad_task_file),
+    )
+    state = service.create_loop(run_config, loop_id="task-loop")
+
+    class FakeStatic:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def update(self, text: str) -> None:
+            self.text = text
+
+    detail = FakeStatic()
+    meta = FakeStatic()
+    view = FakeStatic()
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+    app._render_summary_bar = lambda: None  # type: ignore[method-assign]
+    widgets = {
+        "#detail_view": detail,
+        "#log_meta": meta,
+        "#log_view": view,
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    app._render_selected()
+
+    assert "❌ bad task file:" in detail.text
+    assert "task-template --with-rules" in detail.text
+    assert "Missing task sections: Doing, Done" in detail.text
+
+
 def test_memory_selection_moves_to_next_entry(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(

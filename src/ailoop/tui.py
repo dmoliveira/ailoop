@@ -16,7 +16,7 @@ from textual.widgets import Button, DataTable, Header, Input, Static
 from .memory import MemoryStore
 from .service import LoopService
 from .stats import STATUS_ICONS
-from .tasks import parse_task_file
+from .tasks import parse_task_file, render_task_file_error
 
 FilterMode = Literal["running", "active", "all"]
 LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
@@ -1012,7 +1012,13 @@ class LoopDashboard(App[None]):
                     ]
                 )
             except Exception as exc:
-                lines.extend(["", f"task file error: {exc}"])
+                task_error_lines = render_task_file_error(
+                    Path(state.run_config.task_file),
+                    exc,
+                ).splitlines()
+                lines.extend(
+                    ["", *task_error_lines]
+                )
         detail.update("\n".join(lines))
 
         paths = self.service.loop_paths(state.loop_id) if state.iterations else None

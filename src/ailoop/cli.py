@@ -17,6 +17,7 @@ from .tasks import (
     parse_task_file,
     render_task_file_check,
     render_task_file_check_verbose,
+    render_task_file_error,
 )
 from .tui import launch_in_tmux, run_tui
 
@@ -542,16 +543,6 @@ def print_json(payload: object) -> None:
     print(json.dumps(payload, indent=2))
 
 
-def friendly_task_file_error(path: Path, exc: Exception) -> str:
-    return "\n".join(
-        [
-            f"❌ bad task file: {path}",
-            f"↳ {exc}",
-            "↳ tip: ailoop task-template --with-rules",
-        ]
-    )
-
-
 def normalize_global_args(argv: list[str]) -> list[str]:
     if "--config" not in argv:
         return argv
@@ -646,7 +637,7 @@ def main() -> None:
                 if args.json:
                     print_json({"ok": False, "path": str(path), "error": str(exc)})
                 else:
-                    print(friendly_task_file_error(path, exc))
+                    print(render_task_file_error(path, exc))
                 raise SystemExit(1) from exc
             if args.json:
                 print_json({"ok": True, "path": str(path), **task_state.to_dict()})

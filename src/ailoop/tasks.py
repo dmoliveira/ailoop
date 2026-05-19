@@ -77,6 +77,16 @@ def render_task_file_check_verbose(state: TaskFileState) -> str:
     return "\n".join(lines)
 
 
+def render_task_file_error(path: Path, exc: Exception) -> str:
+    return "\n".join(
+        [
+            f"❌ bad task file: {path}",
+            f"↳ {exc}",
+            "↳ tip: ailoop task-template --with-rules",
+        ]
+    )
+
+
 def parse_task_file(path: Path, max_doing: int = 1) -> TaskFileState:
     if not path.exists():
         raise FileNotFoundError(f"Task file not found: {path}")
@@ -119,16 +129,22 @@ def parse_task_file(path: Path, max_doing: int = 1) -> TaskFileState:
         if current in {"To do", "Doing"}:
             if none_flags[current]:
                 raise ValueError(f"Cannot mix tasks with - None in {current}")
-            if not line.startswith("- [ ] "):
+            if not line.startswith("- [ ]"):
                 raise ValueError(f"Invalid task line in {current}: {line}")
-            sections[current].append(line[6:].strip())
+            task = line[6:].strip()
+            if not task:
+                raise ValueError(f"Empty task item in {current}")
+            sections[current].append(task)
             continue
         if current == "Done":
             if none_flags[current]:
                 raise ValueError("Cannot mix tasks with - None in Done")
-            if not line.startswith("- [x] "):
+            if not line.startswith("- [x]"):
                 raise ValueError(f"Invalid task line in Done: {line}")
-            sections[current].append(line[6:].strip())
+            task = line[6:].strip()
+            if not task:
+                raise ValueError("Empty task item in Done")
+            sections[current].append(task)
 
     missing = [name for name in sections if name not in seen]
     if missing:
