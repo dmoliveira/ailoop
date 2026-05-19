@@ -746,6 +746,21 @@ def test_memory_toolbar_buttons_route_to_memory_actions() -> None:
     assert seen == ["memory", "favorites", "history", "archived"]
 
 
+def test_memory_toolbar_buttons_use_clearer_labels() -> None:
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.query_one("#memory-label-prev").label == "b prev label"
+            assert app.query_one("#memory-label-next").label == "n next label"
+            assert app.query_one("#memory-label-clear").label == "c clear label"
+            assert app.query_one("#memory-scope-toggle").label == "o folders"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_memory_log_text_filters_to_selected_label(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
