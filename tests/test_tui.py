@@ -1144,6 +1144,80 @@ def test_resume_uses_safe_fallback_cwd_when_launch_cwd_is_missing(monkeypatch) -
     assert seen["cwd"] == Path.home()
 
 
+def test_missing_cwd_tui_flow_keeps_safe_cwd_for_replay_and_resume(
+    monkeypatch, tmp_path: Path
+) -> None:
+    service = LoopService(tmp_path / "state")
+    memory = MemoryStore(tmp_path / "memory")
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    service.create_loop(run_config, loop_id="loop-123")
+    entry = memory.create(
+        kind="history",
+        title="Replay safely",
+        run_config=run_config,
+        folder=tmp_path / "missing-cwd-source",
+        favorite=False,
+    )
+    calls = []
+
+    def fake_popen(command, cwd, stdout, stderr, start_new_session):  # type: ignore[no-untyped-def]
+        calls.append(
+            {
+                "command": command,
+                "cwd": cwd,
+                "stdout": stdout,
+                "stderr": stderr,
+                "start_new_session": start_new_session,
+            }
+        )
+        return subprocess.Popen  # type: ignore[return-value]
+
+    def missing_getcwd() -> str:
+        raise FileNotFoundError
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    monkeypatch.setattr("os.getcwd", missing_getcwd)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        app.memory = memory
+        app.log_kind = "memory"
+        app.memory_filter = "history"
+        app.selected_loop_id = "loop-123"
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert app.memory_all_folders is True
+            assert app._memory_scope_text() == "all-folders (cwd unavailable)"
+            app.action_memory_replay()
+            app.action_resume_selected()
+            await pilot.pause()
+
+    import asyncio
+
+    asyncio.run(run_test())
+    assert [call["command"][-2:] for call in calls] == [
+        ["replay", entry.id],
+        ["resume", "loop-123"],
+    ]
+    assert all(call["cwd"] == Path.home() for call in calls)
+
+
 def test_memory_selection_moves_to_next_entry(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
