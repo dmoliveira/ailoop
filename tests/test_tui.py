@@ -199,6 +199,17 @@ def test_empty_loop_message_for_no_loops(tmp_path: Path) -> None:
     assert 'ailoop run "Review the repo"' in text
 
 
+def test_empty_loop_message_for_current_filter_has_recovery_hint(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.filter_mode = "all"
+    app._summary_counts = lambda: (1, 0, 0)  # type: ignore[method-assign]
+    text = app._empty_loop_message()
+    assert "No loops in the current filter." in text
+    assert "Press l for all loops, g for running, or a for active." in text
+
+
 def test_unselected_detail_message_includes_counts(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -1464,6 +1475,29 @@ def test_memory_detail_text_uses_archived_empty_state(tmp_path: Path) -> None:
     assert "press 5 to return to all entries" in text.lower()
 
 
+def test_memory_query_placeholder_is_descriptive() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    assert app._memory_query_placeholder() == "memory query: title/id/label"
+
+
+def test_memory_empty_state_prefers_query_clear_hint(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = MemoryStore(tmp_path)
+    app.log_kind = "memory"
+    app.memory_query = "nightly"
+    text = app._memory_log_text().lower()
+    assert "press esc to clear the query" in text
+
+
+def test_memory_empty_state_prefers_label_clear_hint(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = MemoryStore(tmp_path)
+    app.log_kind = "memory"
+    app.memory_label = "ops"
+    text = app._memory_detail_text().lower()
+    assert "press c to clear the label" in text
+
+
 def test_memory_delete_requires_confirmation(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -1802,7 +1836,7 @@ def test_memory_archived_empty_state_mentions_archive_flow(tmp_path: Path) -> No
     text = app._memory_log_text()
     assert "No archived memory entries found." in text
     assert "z twice" in text
-    assert "press 5 for all entries" in text.lower()
+    assert "press 5 to return to all entries" in text.lower()
 
 
 def test_memory_restore_unarchives_selected_entry(tmp_path: Path) -> None:
