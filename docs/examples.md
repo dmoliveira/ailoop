@@ -56,6 +56,21 @@ Inside the TUI:
 - use `[` and `]` to move between memory entries
 - use `8`, `9`, `v`, `z`, and `x` to exercise replay/favorite/restore/archive/delete
 
+GitHub PR helper:
+
+```bash
+python3 ./scripts/github_pr_create.py \
+  --repo dmoliveira/ailoop \
+  --title "Polish TUI fallback" \
+  --head dmoliveira:feat/example-branch \
+  --base main \
+  --body "## Summary\n- describe the change"
+```
+
+- uses `GITHUB_TOKEN` / `GH_TOKEN` when present
+- otherwise falls back to `gh auth token`
+- prints the raw GitHub API response JSON on success
+
 JSON:
 
 ```bash
