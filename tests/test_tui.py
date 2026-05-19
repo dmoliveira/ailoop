@@ -1578,6 +1578,136 @@ def test_memory_archive_requires_confirmation(tmp_path: Path) -> None:
     assert memory.load(entry.id, folder=Path.cwd()).id == entry.id
 
 
+def test_sync_button_state_uses_explicit_confirm_labels(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Confirm me",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_archive_armed = True
+    app.memory_delete_armed = True
+    app.delete_armed = True
+    app._render_help_bar = lambda state: None  # type: ignore[method-assign]
+
+    class FakeButton:
+        def __init__(self) -> None:
+            self.disabled = False
+            self.label = ""
+
+        def set_class(self, active: bool, class_name: str) -> None:
+            return None
+
+    buttons = {
+        selector: FakeButton()
+        for selector in [
+            "#filter-running",
+            "#filter-active",
+            "#filter-all",
+            "#log-stdout",
+            "#log-stderr",
+            "#log-prompt",
+            "#log-events",
+            "#log-memory",
+            "#log-memory-favorites",
+            "#log-memory-history",
+            "#log-memory-presets",
+            "#log-memory-archived",
+            "#memory-scope-toggle",
+            "#pause",
+            "#resume",
+            "#stop",
+            "#remove",
+            "#memory-replay",
+            "#memory-favorite",
+            "#memory-restore",
+            "#memory-archive",
+            "#memory-delete",
+        ]
+    }
+
+    app.query_one = lambda selector, *_args, **_kwargs: buttons[selector]  # type: ignore[method-assign]
+    app._sync_button_state()
+    assert buttons["#memory-archive"].label == "z confirm archive"
+    assert buttons["#memory-delete"].label == "x confirm delete"
+    assert buttons["#remove"].label == "✖ Confirm delete"
+
+
+def test_memory_help_text_switches_to_confirm_actions_when_armed(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="Review the repo",
+        runner="opencode",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=10,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    memory.create(
+        kind="preset",
+        title="Confirm me",
+        run_config=run_config,
+        folder=Path.cwd(),
+        favorite=False,
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app.memory_archive_armed = True
+    app.memory_delete_armed = True
+    text = app._memory_help_text(width=120)
+    assert "z confirm archive" in text
+    assert "x confirm delete" in text
+    assert "z archive" not in text
+    assert "x delete" not in text
+
+
+def test_loop_help_bar_switches_to_confirm_delete_when_armed() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.delete_armed = True
+
+    class FakeBar:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def update(self, text: str) -> None:
+            self.text = text
+
+    bar = FakeBar()
+    app.query_one = lambda selector, *_args, **_kwargs: bar  # type: ignore[method-assign]
+    state = type("State", (), {"status": "paused"})()
+    app._render_help_bar(state)
+    assert "d confirm delete" in bar.text
+    assert "d delete" not in bar.text
+
+
 def test_memory_archive_hides_selected_entry_from_default_list(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(

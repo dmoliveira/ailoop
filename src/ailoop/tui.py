@@ -471,13 +471,11 @@ class LoopDashboard(App[None]):
             parts.append("o")
         parts.append("/")
         if self._primary_memory_entry() is not None:
-            parts.append("8/9/z/x")
+            archive_token = "z!" if self.memory_archive_armed else "z"
+            delete_token = "x!" if self.memory_delete_armed else "x"
+            parts.append(f"8/9/{archive_token}/{delete_token}")
             if self._primary_memory_entry().archived:  # type: ignore[union-attr]
                 parts.append("v")
-        if self.memory_archive_armed:
-            parts.append("z!")
-        if self.memory_delete_armed:
-            parts.append("x!")
         return " ".join(parts) if parts else "read"
 
     def _memory_help_text(self, width: int | None = None) -> str:
@@ -498,16 +496,12 @@ class LoopDashboard(App[None]):
                     "esc clear query",
                     "8 replay",
                     "9 favorite",
-                    "z archive",
-                    "x delete",
+                    "z confirm archive" if self.memory_archive_armed else "z archive",
+                    "x confirm delete" if self.memory_delete_armed else "x delete",
                 ]
             )
             if self._primary_memory_entry().archived:  # type: ignore[union-attr]
                 memory_actions.append("v restore")
-        if self.memory_archive_armed:
-            memory_actions.append("z confirm")
-        if self.memory_delete_armed:
-            memory_actions.append("x confirm")
         if compact:
             action_text = self._memory_compact_actions()
         else:
@@ -569,15 +563,17 @@ class LoopDashboard(App[None]):
             self.log_kind == "memory" and memory_entry is not None and not memory_entry.archived
         )
         self.query_one("#memory-archive", Button).label = (
-            "z confirm" if self.memory_archive_armed else "z archive"
+            "z confirm archive" if self.memory_archive_armed else "z archive"
         )
         self.query_one("#memory-delete", Button).disabled = not (
             self.log_kind == "memory" and memory_entry is not None
         )
         self.query_one("#memory-delete", Button).label = (
-            "x confirm" if self.memory_delete_armed else "x delete"
+            "x confirm delete" if self.memory_delete_armed else "x delete"
         )
-        self.query_one("#remove", Button).label = "✖ Confirm" if self.delete_armed else "✖ Delete"
+        self.query_one("#remove", Button).label = (
+            "✖ Confirm delete" if self.delete_armed else "✖ Delete"
+        )
         self._render_help_bar(state)
 
     def _render_help_bar(self, state: object | None) -> None:
@@ -597,7 +593,10 @@ class LoopDashboard(App[None]):
             actions.append("u resume")
         if loop_state in {"running", "pause_requested", "paused"}:
             actions.append("s stop")
-        if loop_state not in {"running", "pause_requested", "stop_requested"}:
+        if (
+            loop_state not in {"running", "pause_requested", "stop_requested"}
+            and not self.delete_armed
+        ):
             actions.append("d delete")
         if self.delete_armed:
             actions.append("d confirm delete")
