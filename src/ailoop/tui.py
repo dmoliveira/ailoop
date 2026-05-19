@@ -462,8 +462,23 @@ class LoopDashboard(App[None]):
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
         if actual_width and actual_width <= COMPACT_LAYOUT_WIDTH:
-            return "↑↓ g/a/l 1-7/m/0 r q"
+            return "↑↓ filt g/a/l · 1-7/m/0 · r/q"
         return "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
+
+    def _memory_compact_actions(self) -> str:
+        parts = ["[ ]", "b/n/c"]
+        if self._can_toggle_memory_scope():
+            parts.append("o")
+        parts.append("/")
+        if self._primary_memory_entry() is not None:
+            parts.append("8/9/z/x")
+            if self._primary_memory_entry().archived:  # type: ignore[union-attr]
+                parts.append("v")
+        if self.memory_archive_armed:
+            parts.append("z!")
+        if self.memory_delete_armed:
+            parts.append("x!")
+        return " ".join(parts) if parts else "read"
 
     def _memory_help_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
@@ -477,10 +492,10 @@ class LoopDashboard(App[None]):
                     "] next",
                     "b label<",
                     "n label>",
-                    "c labelx",
+                    "c clear label",
                     *(["o scope"] if self._can_toggle_memory_scope() else []),
                     "/ query",
-                    "esc queryx",
+                    "esc clear query",
                     "8 replay",
                     "9 favorite",
                     "z archive",
@@ -494,9 +509,7 @@ class LoopDashboard(App[None]):
         if self.memory_delete_armed:
             memory_actions.append("x confirm")
         if compact:
-            action_text = (
-                " ".join(token.split()[0] for token in memory_actions) if memory_actions else "ro"
-            )
+            action_text = self._memory_compact_actions()
         else:
             action_text = " · ".join(memory_actions) if memory_actions else "read only"
         base = self._footer_base_text(width=actual_width)
@@ -504,10 +517,8 @@ class LoopDashboard(App[None]):
         labels = len(self._memory_labels())
         if compact:
             return (
-                f"{base} · {self.memory_filter} {self.memory_label or '-'} "
-                f"{self.memory_query or '-'} "
-                f"{self._memory_scope_text(compact=True)} "
-                f"{entries}e {labels}/{label_count}l {action_text}"
+                f"{base} · mem:{self.memory_filter} · {self._memory_scope_text(compact=True)} · "
+                f"ent:{entries} · act:{action_text}"
             )
         return (
             f"{base} · memory {self.memory_filter} · label {self.memory_label or '-'} · "
@@ -715,7 +726,7 @@ class LoopDashboard(App[None]):
     def _memory_scope_text(self, *, compact: bool = False) -> str:
         if self.launch_cwd is None:
             if compact:
-                return "all*"
+                return "all(no-cwd)"
             return "all-folders (cwd unavailable)"
         return "all-folders" if self.memory_all_folders else "cwd"
 

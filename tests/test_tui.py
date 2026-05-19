@@ -57,7 +57,7 @@ def test_memory_mode_tolerates_missing_launch_cwd(monkeypatch, tmp_path: Path) -
     assert app.memory_all_folders is True
     assert app._can_toggle_memory_scope() is False
     assert app._memory_scope_text() == "all-folders (cwd unavailable)"
-    assert app._memory_scope_text(compact=True) == "all*"
+    assert app._memory_scope_text(compact=True) == "all(no-cwd)"
     assert entry.id in app._memory_log_text()
 
 
@@ -557,10 +557,11 @@ def test_memory_help_text_uses_compact_footer_at_80_columns(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=80)
-    assert "↑↓ g/a/l 1-7/m/0 r q" in text
-    assert "all - - cwd" in text
-    assert "1e" in text
-    assert "[ ] b n c o / esc 8 9 z x" in text
+    assert "↑↓ filt g/a/l · 1-7/m/0 · r/q" in text
+    assert "mem:all" in text
+    assert "cwd" in text
+    assert "ent:1" in text
+    assert "act:[ ] b/n/c o / 8/9/z/x" in text
 
 
 def test_memory_log_text_filters_to_favorites(tmp_path: Path) -> None:
