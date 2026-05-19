@@ -360,7 +360,7 @@ class LoopDashboard(App[None]):
                     yield Button("v restore", id="memory-restore")
                     yield Button("z archive", id="memory-archive")
                     yield Button("x delete", id="memory-delete")
-                yield Input(placeholder="memory query", id="memory-query")
+                yield Input(placeholder=self._memory_query_placeholder(), id="memory-query")
                 yield Static(id="log_meta")
                 yield Static(id="log_view")
             with Vertical(id="details"):
@@ -633,7 +633,10 @@ class LoopDashboard(App[None]):
                 f"All loops: {total} · running: {running}\n"
                 "Press l for all or g for running."
             )
-        return "No loops in the current filter."
+        return (
+            "No loops in the current filter.\n\n"
+            "Press l for all loops, g for running, or a for active."
+        )
 
     def _unselected_detail_message(self) -> str:
         total, active, running = self._summary_counts()
@@ -735,6 +738,19 @@ class LoopDashboard(App[None]):
         prefix = "press" if lowercase else "Press"
         return f"{prefix} o to {self._memory_scope_toggle_hint()}"
 
+    def _memory_query_placeholder(self) -> str:
+        return "memory query: title/id/label"
+
+    def _memory_recovery_hint(self, *, lowercase: bool = False) -> str:
+        prefix = "press" if lowercase else "Press"
+        if self.memory_query:
+            return f"{prefix} esc to clear the query"
+        if self.memory_label is not None:
+            return f"{prefix} c to clear the label"
+        if self.memory_filter == "archived":
+            return f"{prefix} 5 to return to all entries"
+        return f"{prefix} {self._memory_filter_hint()} to switch this view"
+
     def _memory_log_text(self) -> str:
         entries = self._memory_entries()
         if entries:
@@ -758,7 +774,8 @@ class LoopDashboard(App[None]):
                 "No archived memory entries found.\n\n"
                 f"scope: {self._memory_scope_text()} · label: {self.memory_label or '-'} · "
                 f"query: {self.memory_query or '-'}\n"
-                "Archive one from the memory list with z twice, or press 5 for all entries.\n"
+                "Archive one from the memory list with z twice.\n"
+                f"{self._memory_recovery_hint()}.\n"
                 f"{self._memory_scope_instruction()}."
             )
         return (
@@ -767,7 +784,7 @@ class LoopDashboard(App[None]):
             f"label: {self.memory_label or '-'} · query: {self.memory_query or '-'}\n"
             "Create one with:\n"
             '  ailoop memory save "Quick review" "Review the repo"\n\n'
-            f"Then press {self._memory_filter_hint()} to switch this view. "
+            f"Then {self._memory_recovery_hint(lowercase=True)}. "
             f"{self._memory_scope_instruction()}."
         )
 
@@ -797,7 +814,7 @@ class LoopDashboard(App[None]):
                 [
                     "no archived entries match this view",
                     "archive one from memory mode with z twice",
-                    "press 5 to return to all entries",
+                    self._memory_recovery_hint(lowercase=True),
                     self._memory_scope_instruction(lowercase=True),
                 ]
             )
@@ -806,7 +823,7 @@ class LoopDashboard(App[None]):
                 [
                     "no memory entry is selected",
                     "save one with ailoop memory save ...",
-                    f"press {self._memory_filter_hint()} to switch this view",
+                    self._memory_recovery_hint(lowercase=True),
                     self._memory_scope_instruction(lowercase=True),
                 ]
             )
