@@ -206,6 +206,10 @@ class LoopDashboard(App[None]):
         border: round #36506f;
     }
 
+    .memory-ui-hidden {
+        display: none;
+    }
+
     #memory-query {
         margin: 0 0 1 0;
         border: round #2b3b52;
@@ -344,13 +348,19 @@ class LoopDashboard(App[None]):
                     yield Button("2 stderr", id="log-stderr")
                     yield Button("3 prompt", id="log-prompt")
                     yield Button("4 events", id="log-events")
-                with Horizontal(classes="toolbar memory-filter-toolbar"):
+                with Horizontal(
+                    id="memory-filter-toolbar",
+                    classes="toolbar memory-filter-toolbar",
+                ):
                     yield Button("5 memory", id="log-memory")
                     yield Button("6 favorites", id="log-memory-favorites")
                     yield Button("7 history", id="log-memory-history")
                     yield Button("m presets", id="log-memory-presets")
                     yield Button("0 archived", id="log-memory-archived")
-                with Horizontal(classes="toolbar memory-action-toolbar"):
+                with Horizontal(
+                    id="memory-action-toolbar",
+                    classes="toolbar memory-action-toolbar",
+                ):
                     yield Button("b prev label", id="memory-label-prev")
                     yield Button("n next label", id="memory-label-next")
                     yield Button("c clear label", id="memory-label-clear")
@@ -574,6 +584,11 @@ class LoopDashboard(App[None]):
         self.query_one("#remove", Button).label = (
             "✖ Confirm delete" if self.delete_armed else "✖ Delete"
         )
+        memory_visible = self.log_kind == "memory"
+        self.query_one("#memory-action-toolbar", Horizontal).set_class(
+            not memory_visible, "memory-ui-hidden"
+        )
+        self.query_one("#memory-query", Input).set_class(not memory_visible, "memory-ui-hidden")
         self._render_help_bar(state)
 
     def _render_help_bar(self, state: object | None) -> None:

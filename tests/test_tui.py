@@ -761,6 +761,35 @@ def test_memory_toolbar_buttons_use_clearer_labels() -> None:
     asyncio.run(run_test())
 
 
+def test_memory_controls_only_show_in_memory_mode() -> None:
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.log_kind != "memory"
+            assert not app.query_one("#memory-filter-toolbar").has_class("memory-ui-hidden")
+            assert app.query_one("#memory-action-toolbar").has_class("memory-ui-hidden")
+            assert app.query_one("#memory-query").has_class("memory-ui-hidden")
+
+            app.action_set_log_memory()
+            await pilot.pause()
+            assert app.log_kind == "memory"
+            assert not app.query_one("#memory-filter-toolbar").has_class("memory-ui-hidden")
+            assert not app.query_one("#memory-action-toolbar").has_class("memory-ui-hidden")
+            assert not app.query_one("#memory-query").has_class("memory-ui-hidden")
+
+            app.action_set_log_stdout()
+            await pilot.pause()
+            assert app.log_kind == "stdout"
+            assert not app.query_one("#memory-filter-toolbar").has_class("memory-ui-hidden")
+            assert app.query_one("#memory-action-toolbar").has_class("memory-ui-hidden")
+            assert app.query_one("#memory-query").has_class("memory-ui-hidden")
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_memory_log_text_filters_to_selected_label(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -1667,6 +1696,9 @@ def test_sync_button_state_uses_explicit_confirm_labels(tmp_path: Path) -> None:
         def set_class(self, active: bool, class_name: str) -> None:
             return None
 
+    class FakeWidget(FakeButton):
+        pass
+
     buttons = {
         selector: FakeButton()
         for selector in [
@@ -1682,6 +1714,8 @@ def test_sync_button_state_uses_explicit_confirm_labels(tmp_path: Path) -> None:
             "#log-memory-history",
             "#log-memory-presets",
             "#log-memory-archived",
+            "#memory-filter-toolbar",
+            "#memory-action-toolbar",
             "#memory-scope-toggle",
             "#pause",
             "#resume",
@@ -1692,6 +1726,7 @@ def test_sync_button_state_uses_explicit_confirm_labels(tmp_path: Path) -> None:
             "#memory-restore",
             "#memory-archive",
             "#memory-delete",
+            "#memory-query",
         ]
     }
 
