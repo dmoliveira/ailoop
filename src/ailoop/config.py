@@ -64,6 +64,43 @@ DEFAULT_CONFIG: dict[str, Any] = {
 }
 
 
+def _coerce_optional_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _coerce_int(value, field_name)
+
+
+def _coerce_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    if isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(f"{field_name} must be an integer")
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer") from exc
+
+
+def _validate_non_negative(value: int, field_name: str) -> int:
+    if value < 0:
+        raise ValueError(f"{field_name} must be >= 0")
+    return value
+
+
+def _validate_positive(value: int, field_name: str) -> int:
+    if value < 1:
+        raise ValueError(f"{field_name} must be >= 1")
+    return value
+
+
+def _validate_steps(value: int | None, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _validate_non_negative(value, field_name)
+
+
 def deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
     merged = deepcopy(base)
     for key, value in overlay.items():
@@ -96,6 +133,23 @@ def load_app_config(config_path: Path | None = None) -> AppConfig:
 
 
 def build_app_config(data: dict[str, Any]) -> AppConfig:
+    loop_steps = _validate_steps(
+        _coerce_optional_int(data["loop"].get("steps"), "loop.steps"),
+        "loop.steps",
+    )
+    loop_pause_seconds = _validate_non_negative(
+        _coerce_int(data["loop"]["pause_seconds"], "loop.pause_seconds"),
+        "loop.pause_seconds",
+    )
+    loop_retry_count = _validate_non_negative(
+        _coerce_int(data["loop"]["retry_count"], "loop.retry_count"),
+        "loop.retry_count",
+    )
+    tasks_max_doing = _validate_positive(
+        _coerce_int(data.get("tasks", {}).get("max_doing", 1), "tasks.max_doing"),
+        "tasks.max_doing",
+    )
+
     runners = {
         name: RunnerConfig(
             command=runner["command"],
@@ -119,17 +173,17 @@ def build_app_config(data: dict[str, Any]) -> AppConfig:
             pre_prompt=str(data["prompt"]["pre_prompt"]),
         ),
         loop=LoopConfig(
-            steps=data["loop"].get("steps"),
-            pause_seconds=int(data["loop"]["pause_seconds"]),
+            steps=loop_steps,
+            pause_seconds=loop_pause_seconds,
             continue_on_error=bool(data["loop"]["continue_on_error"]),
-            retry_count=int(data["loop"]["retry_count"]),
+            retry_count=loop_retry_count,
         ),
         tasks=TasksConfig(
             file=str(expand_path(data.get("tasks", {}).get("file")))
             if data.get("tasks", {}).get("file")
             else None,
             stop_when_complete=bool(data.get("tasks", {}).get("stop_when_complete", False)),
-            max_doing=int(data.get("tasks", {}).get("max_doing", 1)),
+            max_doing=tasks_max_doing,
         ),
         runners=runners,
     )
@@ -152,14 +206,21 @@ def resolve_run_config(
     if selected_runner not in app_config.runners:
         raise ValueError(f"Unknown runner: {selected_runner}")
     runner_config = app_config.runners[selected_runner]
+    resolved_steps = steps if steps is not None else app_config.loop.steps
+    resolved_pause_seconds = (
+        pause_seconds if pause_seconds is not None else app_config.loop.pause_seconds
+    )
+    resolved_retry_count = app_config.loop.retry_count
+    resolved_max_doing = app_config.tasks.max_doing
+
     return LoopRunConfig(
         prompt=prompt,
         runner=selected_runner,
         agent=agent if agent is not None else app_config.default_agent,
-        steps=steps if steps is not None else app_config.loop.steps,
-        pause_seconds=pause_seconds if pause_seconds is not None else app_config.loop.pause_seconds,
+        steps=_validate_steps(resolved_steps, "loop.steps"),
+        pause_seconds=_validate_non_negative(resolved_pause_seconds, "loop.pause_seconds"),
         continue_on_error=app_config.loop.continue_on_error,
-        retry_count=app_config.loop.retry_count,
+        retry_count=_validate_non_negative(resolved_retry_count, "loop.retry_count"),
         pre_prompt_enabled=(
             pre_prompt_enabled
             if pre_prompt_enabled is not None
@@ -182,7 +243,7 @@ def resolve_run_config(
             if stop_when_tasks_complete is not None
             else app_config.tasks.stop_when_complete
         ),
-        max_doing=app_config.tasks.max_doing,
+        max_doing=_validate_positive(resolved_max_doing, "tasks.max_doing"),
         runner_command=runner_config.command,
         runner_args=runner_config.args,
         runner_env=runner_config.env,

@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import default_config_path, init_config_text, load_app_config, resolve_run_config
 from .memory import MemoryStore, render_memory_list, render_memory_show, run_config_from_entry
-from .paths import ensure_dir
+from .paths import ensure_dir, read_last_lines
 from .service import LoopService
 from .stats import get_color_mode, render_loop_list, render_stats, render_status, set_color_mode
 from .tasks import (
@@ -81,8 +81,15 @@ ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
 def _read_log_excerpt(path: Path, lines: int) -> str:
     if not path.exists():
         raise FileNotFoundError(f"Log file not found: {path}")
-    content = path.read_text().splitlines()
-    return "\n".join(content[-lines:])
+    return read_last_lines(path, lines)
+
+
+def _read_log_content(path: Path, *, tail_lines: int | None = None) -> str:
+    if not path.exists():
+        return "<missing>"
+    if tail_lines is not None:
+        return read_last_lines(path, tail_lines)
+    return path.read_text()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -487,6 +494,11 @@ def build_parser() -> argparse.ArgumentParser:
         dest="print_content",
         help="Print log contents instead of only file paths",
     )
+    logs_parser.add_argument(
+        "--tail-lines",
+        type=int,
+        help="When used with --print, only show the last N lines for each selected log",
+    )
 
     tail_parser = subparsers.add_parser(
         "tail",
@@ -845,7 +857,9 @@ def main() -> None:
                         "path": str(path),
                         "exists": path.exists(),
                         "content": (
-                            path.read_text() if args.print_content and path.exists() else None
+                            _read_log_content(path, tail_lines=args.tail_lines)
+                            if args.print_content
+                            else None
                         ),
                     }
                 print_json(payload)
@@ -854,7 +868,7 @@ def main() -> None:
                 path = paths[kind]
                 print(f"[{kind}] {path}")
                 if args.print_content:
-                    print(path.read_text() if path.exists() else "<missing>")
+                    print(_read_log_content(path, tail_lines=args.tail_lines))
             return
 
         if args.command == "tail":
@@ -871,6 +885,12 @@ def main() -> None:
             print_json({"ok": False, "error": str(exc)})
         else:
             print(_friendly_not_found_message(args, exc))
+        raise SystemExit(1) from exc
+    except ValueError as exc:
+        if args.json:
+            print_json({"ok": False, "error": str(exc)})
+        else:
+            print(f"Invalid configuration: {exc}")
         raise SystemExit(1) from exc
     finally:
         set_color_mode(previous_color_mode)

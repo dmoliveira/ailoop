@@ -6,13 +6,19 @@ import pytest
 from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig
 from ailoop.service import LoopService
-from ailoop.tui import LoopDashboard, launch_in_tmux, render_progress_text, tail_text
+from ailoop.tui import LoopDashboard, launch_in_tmux, read_events, render_progress_text, tail_text
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
     path = tmp_path / "out.log"
     path.write_text("a\nb\nc\n")
     assert tail_text(path, lines=2) == "b\nc"
+
+
+def test_read_events_reads_last_rows(tmp_path: Path) -> None:
+    path = tmp_path / "events.jsonl"
+    path.write_text("1\n2\n3\n")
+    assert read_events(path, limit=2) == "2\n3"
 
 
 def test_render_progress_text_uses_bar_for_finite_targets() -> None:

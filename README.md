@@ -52,11 +52,25 @@ Install:
 uv sync
 ```
 
+Run from this repo:
+
+```bash
+uv run ailoop init-config
+uv run ailoop run "Do exactly 3 iterations." --steps 3
+```
+
+Or install globally:
+
+```bash
+pipx install ailoop
+ailoop --help
+```
+
 Start:
 
 ```bash
 ailoop init-config
-ailoop run "Review the repo and keep iterating." --runner opencode --agent orchestrator
+ailoop run "Review the repo and iterate for 3 steps." --runner opencode --agent orchestrator --steps 3
 ailoop run "Do exactly 5 iterations." --steps 5
 ```
 
@@ -72,6 +86,7 @@ Watch:
 
 ```bash
 ailoop ps
+ailoop list --active
 ailoop tail <loop-id>
 ailoop --json ps
 ```

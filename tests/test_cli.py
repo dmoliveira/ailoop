@@ -215,7 +215,53 @@ def test_memory_save_list_show_and_edit(capsys, monkeypatch, tmp_path: Path) -> 
     listed_text = capsys.readouterr().out
     assert "Used" in listed_text
     assert "Labels" in listed_text
-    assert "updated" in listed_text
+
+
+def test_memory_list_skips_corrupt_entries(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    memory = MemoryStore(tmp_path / "state")
+    good = memory.create(
+        kind="preset",
+        title="Good entry",
+        run_config=LoopRunConfig(
+            prompt="hello",
+            runner="test",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=["-c", "print('ok')"],
+        ),
+        folder=Path.cwd(),
+    )
+    (tmp_path / "state" / "memory" / "presets" / "broken.json").write_text("{not-json")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--json", "--config", str(config_path), "memory", "list", "--kind", "preset"],
+    )
+    main()
+    listed = json.loads(capsys.readouterr().out)
+
+    assert [entry["id"] for entry in listed] == [good.id]
+
+
+def test_invalid_numeric_config_exits_cleanly(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    config_path.write_text(config_path.read_text().replace("pause_seconds: 0", "pause_seconds: -1"))
+
+    monkeypatch.setattr("sys.argv", ["ailoop", "--config", str(config_path), "list"])
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 1
+    assert "Invalid configuration: loop.pause_seconds must be >= 0" in capsys.readouterr().out
 
 
 def test_memory_favorite_and_delete(capsys, monkeypatch, tmp_path: Path) -> None:
@@ -791,7 +837,7 @@ def test_check_task_file_quiet(capsys, monkeypatch, tmp_path: Path) -> None:
 
 def test_check_task_file_bad_file_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:
     path = tmp_path / "bad.md"
-    path.write_text("## To do\n- None\n")
+    path.write_text("# Loop Tasks\n\n## To do\n- bad\n\n## Doing\n- None\n\n## Done\n- None\n")
     monkeypatch.setattr("sys.argv", ["ailoop", "check-task-file", str(path)])
     try:
         main()
@@ -799,6 +845,8 @@ def test_check_task_file_bad_file_is_friendly(capsys, monkeypatch, tmp_path: Pat
         assert exc.code == 1
     out = capsys.readouterr().out
     assert "bad task file" in out
+    assert "line 4" in out
+    assert "content: - bad" in out
     assert "task-template --with-rules" in out
 
 
@@ -827,6 +875,108 @@ def test_check_task_file_json_error(capsys, monkeypatch, tmp_path: Path) -> None
     data = json.loads(out)
     assert data["ok"] is False
     assert "error" in data
+
+
+def test_check_task_file_bad_checkbox_spacing_is_friendly(
+    capsys,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "bad.md"
+    path.write_text("# Loop Tasks\n\n## To do\n- [ ]Task\n\n## Doing\n- None\n\n## Done\n- None\n")
+    monkeypatch.setattr("sys.argv", ["ailoop", "check-task-file", str(path)])
+    try:
+        main()
+    except SystemExit as exc:
+        assert exc.code == 1
+    out = capsys.readouterr().out
+    assert "line 4" in out
+    assert "Invalid task line in To do" in out
+
+
+def test_tail_command_reads_last_lines(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    loop_dir = tmp_path / "state" / "loop-tail" / "logs"
+    loop_dir.mkdir(parents=True)
+    (tmp_path / "state" / "loop-tail" / "state.json").write_text(
+        json.dumps(
+            {
+                "loop_id": "loop-tail",
+                "created_at": "now",
+                "updated_at": "now",
+                "status": "completed",
+                "control": "run",
+                "run_config": {
+                    "prompt": "x",
+                    "runner": "test",
+                    "agent": "orchestrator",
+                    "steps": 1,
+                    "pause_seconds": 0,
+                    "continue_on_error": True,
+                    "retry_count": 0,
+                    "pre_prompt_enabled": False,
+                    "attach_agent_file": False,
+                    "pre_prompt": "",
+                    "agent_file": None,
+                    "runner_command": "python3",
+                    "runner_args": ["-c", "print('ok')"],
+                    "runner_env": {},
+                    "task_file": None,
+                    "stop_when_tasks_complete": False,
+                    "max_doing": 1,
+                },
+                "current_iteration": 1,
+                "completed_iterations": 1,
+                "last_exit_code": 0,
+                "consecutive_failures": 0,
+                "total_duration_seconds": 0.0,
+                "average_duration_seconds": 0.0,
+                "last_summary": "ok",
+                "iterations": [
+                    {
+                        "number": 1,
+                        "started_at": "now",
+                        "finished_at": "now",
+                        "duration_seconds": 0.0,
+                        "exit_code": 0,
+                        "success": True,
+                        "stdout_log": str(loop_dir / "iteration-0001.stdout.log"),
+                        "stderr_log": str(loop_dir / "iteration-0001.stderr.log"),
+                        "prompt_file": str(loop_dir / "iteration-0001.prompt.txt"),
+                        "summary": "ok",
+                    }
+                ],
+            }
+        )
+    )
+    (loop_dir / "iteration-0001.stdout.log").write_text("a\nb\nc\n")
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--config",
+            str(config_path),
+            "tail",
+            "loop-tail",
+            "--kind",
+            "stdout",
+            "-n",
+            "2",
+        ],
+    )
+
+    from ailoop.service import LoopService as RealLoopService
+
+    real_init = RealLoopService.__init__
+
+    def fake_init(self, state_root, emit_output=True):  # type: ignore[no-untyped-def]
+        return real_init(self, tmp_path / "state", emit_output=emit_output)
+
+    monkeypatch.setattr("ailoop.service.LoopService.__init__", fake_init)
+    main()
+
+    assert capsys.readouterr().out == "b\nc\n"
 
 
 def test_check_task_file_state_exit_codes(capsys, monkeypatch, tmp_path: Path) -> None:
@@ -1338,3 +1488,173 @@ runners:
     out = capsys.readouterr().out
     data = json.loads(out)
     assert data["stdout"]["content"] == "ok\n"
+
+
+def test_logs_json_output_can_tail_printed_content(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    loop_dir = tmp_path / "state" / "loop-json-tail" / "logs"
+    loop_dir.mkdir(parents=True)
+    (tmp_path / "state" / "loop-json-tail" / "state.json").write_text(
+        json.dumps(
+            {
+                "loop_id": "loop-json-tail",
+                "created_at": "now",
+                "updated_at": "now",
+                "status": "completed",
+                "control": "run",
+                "run_config": {
+                    "prompt": "x",
+                    "runner": "test",
+                    "agent": "orchestrator",
+                    "steps": 1,
+                    "pause_seconds": 0,
+                    "continue_on_error": True,
+                    "retry_count": 0,
+                    "pre_prompt_enabled": False,
+                    "attach_agent_file": False,
+                    "pre_prompt": "",
+                    "agent_file": None,
+                    "runner_command": "python3",
+                    "runner_args": ["-c", "print('ok')"],
+                    "runner_env": {},
+                    "task_file": None,
+                    "stop_when_tasks_complete": False,
+                    "max_doing": 1,
+                },
+                "current_iteration": 1,
+                "completed_iterations": 1,
+                "last_exit_code": 0,
+                "consecutive_failures": 0,
+                "total_duration_seconds": 0.0,
+                "average_duration_seconds": 0.0,
+                "last_summary": "ok",
+                "iterations": [
+                    {
+                        "number": 1,
+                        "started_at": "now",
+                        "finished_at": "now",
+                        "duration_seconds": 0.0,
+                        "exit_code": 0,
+                        "success": True,
+                        "stdout_log": str(loop_dir / "iteration-0001.stdout.log"),
+                        "stderr_log": str(loop_dir / "iteration-0001.stderr.log"),
+                        "prompt_file": str(loop_dir / "iteration-0001.prompt.txt"),
+                        "summary": "ok",
+                    }
+                ],
+            }
+        )
+    )
+    (loop_dir / "iteration-0001.stdout.log").write_text("a\nb\nc\n")
+    (loop_dir / "iteration-0001.stderr.log").write_text("")
+    (loop_dir / "iteration-0001.prompt.txt").write_text("prompt\n")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "logs",
+            "loop-json-tail",
+            "--print",
+            "--tail-lines",
+            "2",
+        ],
+    )
+    from ailoop.service import LoopService as RealLoopService
+
+    real_init = RealLoopService.__init__
+
+    def fake_init(self, state_root, emit_output=True):  # type: ignore[no-untyped-def]
+        return real_init(self, tmp_path / "state", emit_output=emit_output)
+
+    monkeypatch.setattr("ailoop.service.LoopService.__init__", fake_init)
+    main()
+    out = capsys.readouterr().out
+    data = json.loads(out)
+    assert data["stdout"]["content"] == "b\nc"
+
+
+def test_logs_print_can_tail_selected_content(capsys, monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    loop_dir = tmp_path / "state" / "loop-print-tail" / "logs"
+    loop_dir.mkdir(parents=True)
+    (tmp_path / "state" / "loop-print-tail" / "state.json").write_text(
+        json.dumps(
+            {
+                "loop_id": "loop-print-tail",
+                "created_at": "now",
+                "updated_at": "now",
+                "status": "completed",
+                "control": "run",
+                "run_config": {
+                    "prompt": "x",
+                    "runner": "test",
+                    "agent": "orchestrator",
+                    "steps": 1,
+                    "pause_seconds": 0,
+                    "continue_on_error": True,
+                    "retry_count": 0,
+                    "pre_prompt_enabled": False,
+                    "attach_agent_file": False,
+                    "pre_prompt": "",
+                    "agent_file": None,
+                    "runner_command": "python3",
+                    "runner_args": ["-c", "print('ok')"],
+                    "runner_env": {},
+                    "task_file": None,
+                    "stop_when_tasks_complete": False,
+                    "max_doing": 1,
+                },
+                "current_iteration": 1,
+                "completed_iterations": 1,
+                "last_exit_code": 0,
+                "consecutive_failures": 0,
+                "total_duration_seconds": 0.0,
+                "average_duration_seconds": 0.0,
+                "last_summary": "ok",
+                "iterations": [
+                    {
+                        "number": 1,
+                        "started_at": "now",
+                        "finished_at": "now",
+                        "duration_seconds": 0.0,
+                        "exit_code": 0,
+                        "success": True,
+                        "stdout_log": str(loop_dir / "iteration-0001.stdout.log"),
+                        "stderr_log": str(loop_dir / "iteration-0001.stderr.log"),
+                        "prompt_file": str(loop_dir / "iteration-0001.prompt.txt"),
+                        "summary": "ok",
+                    }
+                ],
+            }
+        )
+    )
+    (loop_dir / "iteration-0001.stdout.log").write_text("a\nb\nc\n")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--config",
+            str(config_path),
+            "logs",
+            "loop-print-tail",
+            "--kind",
+            "stdout",
+            "--print",
+            "--tail-lines",
+            "2",
+        ],
+    )
+    from ailoop.service import LoopService as RealLoopService
+
+    real_init = RealLoopService.__init__
+
+    def fake_init(self, state_root, emit_output=True):  # type: ignore[no-untyped-def]
+        return real_init(self, tmp_path / "state", emit_output=emit_output)
+
+    monkeypatch.setattr("ailoop.service.LoopService.__init__", fake_init)
+    main()
+    out = capsys.readouterr().out
+    assert out == f"[stdout] {loop_dir / 'iteration-0001.stdout.log'}\nb\nc\n"

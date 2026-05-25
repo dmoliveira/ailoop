@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
 from ailoop.config import build_app_config, deep_merge, load_app_config, resolve_run_config
@@ -89,3 +90,63 @@ def test_resolve_run_config_expands_cli_task_file() -> None:
     )
     run_config = resolve_run_config(app_config, prompt="do work", task_file="~/tasks.md")
     assert run_config.task_file == str(Path("~/tasks.md").expanduser().resolve())
+
+
+def test_load_app_config_rejects_negative_numeric_values(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "loop": {"pause_seconds": -1, "retry_count": -2},
+                "tasks": {"max_doing": 0},
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="loop.pause_seconds must be >= 0"):
+        load_app_config(config_path)
+
+
+def test_resolve_run_config_rejects_negative_cli_values() -> None:
+    app_config = build_app_config(
+        {
+            "default_runner": "opencode",
+            "default_agent": "orchestrator",
+            "paths": {"agent_file": None, "state_dir": "~/.config/ailoop/state"},
+            "prompt": {
+                "pre_prompt_enabled": True,
+                "attach_agent_file": True,
+                "pre_prompt": "hello",
+            },
+            "loop": {
+                "steps": None,
+                "pause_seconds": 30,
+                "continue_on_error": True,
+                "retry_count": 0,
+            },
+            "tasks": {"file": None, "stop_when_complete": False, "max_doing": 1},
+            "runners": {
+                "opencode": {"command": "opencode", "args": ["run", "{prompt}"]},
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="loop.steps must be >= 0"):
+        resolve_run_config(app_config, prompt="do work", steps=-1)
+
+    with pytest.raises(ValueError, match="loop.pause_seconds must be >= 0"):
+        resolve_run_config(app_config, prompt="do work", pause_seconds=-1)
+
+
+def test_load_app_config_rejects_bool_and_fractional_numeric_values(tmp_path: Path) -> None:
+    bool_config = tmp_path / "bool-config.yaml"
+    bool_config.write_text(yaml.safe_dump({"loop": {"pause_seconds": True}}))
+
+    with pytest.raises(ValueError, match="loop.pause_seconds must be an integer"):
+        load_app_config(bool_config)
+
+    float_config = tmp_path / "float-config.yaml"
+    float_config.write_text(yaml.safe_dump({"tasks": {"max_doing": 1.5}}))
+
+    with pytest.raises(ValueError, match="tasks.max_doing must be an integer"):
+        load_app_config(float_config)

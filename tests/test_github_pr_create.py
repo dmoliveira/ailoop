@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.error import HTTPError
@@ -106,3 +107,27 @@ def test_main_prints_http_error_body(monkeypatch, capsys) -> None:
 
     assert module.main() == 1
     assert '{"message":"Validation Failed"}' in capsys.readouterr().err
+
+
+def test_main_prints_friendly_auth_error(monkeypatch, capsys) -> None:
+    module = load_module()
+
+    def fake_check_output(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.CalledProcessError(1, ["gh", "auth", "token"])
+
+    monkeypatch.setattr(module.subprocess, "check_output", fake_check_output)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "github_pr_create.py",
+            "--repo",
+            "owner/repo",
+            "--title",
+            "Title",
+            "--head",
+            "owner:branch",
+        ],
+    )
+
+    assert module.main() == 1
+    assert "GitHub auth token not available" in capsys.readouterr().err

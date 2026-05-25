@@ -41,7 +41,10 @@ class StateStore:
             path = child / "state.json"
             if not path.exists():
                 continue
-            states.append(LoopState.from_dict(json.loads(path.read_text())))
+            try:
+                states.append(LoopState.from_dict(json.loads(path.read_text())))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                continue
         return sorted(states, key=lambda item: item.updated_at, reverse=True)
 
     def is_locked(self, loop_id: str) -> bool:
@@ -51,12 +54,12 @@ class StateStore:
         try:
             pid = int(path.read_text().strip())
         except ValueError:
-            path.unlink()
+            path.unlink(missing_ok=True)
             return False
         try:
             os.kill(pid, 0)
         except ProcessLookupError:
-            path.unlink()
+            path.unlink(missing_ok=True)
             return False
         except PermissionError:
             return True
@@ -75,7 +78,13 @@ class StateStore:
         try:
             fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError as exc:
-            raise RuntimeError(f"Loop is already active: {loop_id}") from exc
+            if not self.is_locked(loop_id):
+                try:
+                    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                except FileExistsError as retry_exc:
+                    raise RuntimeError(f"Loop is already active: {loop_id}") from retry_exc
+            else:
+                raise RuntimeError(f"Loop is already active: {loop_id}") from exc
         try:
             os.write(fd, str(os.getpid()).encode())
             yield

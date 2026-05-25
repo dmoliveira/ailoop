@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from ailoop.models import LoopRunConfig
+from ailoop.runners.local import CAPTURE_TAIL_LINES, LocalRunner
 from ailoop.service import LoopService
 from ailoop.stats import render_iteration_summary, render_stats, render_status
 
@@ -58,6 +59,29 @@ def test_pause_request_is_recorded(tmp_path: Path) -> None:
     assert updated.control == "pause"
 
 
+def test_request_control_rejects_invalid_values(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="loop2b")
+
+    with pytest.raises(ValueError, match="Invalid control: invalid"):
+        service.request_control(state.loop_id, "invalid")
+
+
 def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     for loop_id in ["loop-a", "loop-b"]:
@@ -80,6 +104,33 @@ def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
 
     states = service.list_loops()
     assert {state.loop_id for state in states} == {"loop-a", "loop-b"}
+
+
+def test_list_loops_skips_corrupt_state_files(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    service.create_loop(run_config, loop_id="healthy")
+    corrupt_dir = tmp_path / "corrupt"
+    corrupt_dir.mkdir(parents=True)
+    (corrupt_dir / "state.json").write_text("{not-json")
+
+    states = service.list_loops()
+
+    assert [state.loop_id for state in states] == ["healthy"]
 
 
 def test_create_loop_rejects_duplicate_loop_id(tmp_path: Path) -> None:
@@ -225,6 +276,34 @@ def test_stale_lock_is_cleaned_and_remove_can_continue(tmp_path: Path) -> None:
     assert not lock_path.exists()
 
 
+def test_stale_lock_is_cleaned_and_run_can_continue(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="loop7b")
+    lock_path = tmp_path / "loop7b" / ".lock"
+    lock_path.write_text("999999")
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "completed"
+    assert final_state.completed_iterations == 1
+    assert not lock_path.exists()
+
+
 def test_loop_stops_when_task_file_is_complete(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     task_file = tmp_path / "tasks.md"
@@ -320,3 +399,59 @@ def test_stop_request_during_iteration_stops_cleanly(tmp_path: Path) -> None:
     final_state = service.run_loop(state.loop_id)
     assert final_state.status == "stopped"
     assert final_state.control == "stop"
+
+
+def test_local_runner_writes_output_to_logs_and_returns_tail(tmp_path: Path) -> None:
+    runner = LocalRunner()
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+
+    result = runner.run(
+        command="python3",
+        args=[
+            "-c",
+            (
+                "for i in range(120):\n"
+                "    print(f'out-{i}')\n"
+                "import sys\n"
+                "for i in range(120):\n"
+                "    print(f'err-{i}', file=sys.stderr)\n"
+            ),
+        ],
+        env={},
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+    )
+
+    stdout_lines = stdout_log.read_text().splitlines()
+    stderr_lines = stderr_log.read_text().splitlines()
+
+    assert result.exit_code == 0
+    assert len(stdout_lines) == 120
+    assert len(stderr_lines) == 120
+    assert stdout_lines[0] == "out-0"
+    assert stdout_lines[-1] == "out-119"
+    assert stderr_lines[0] == "err-0"
+    assert stderr_lines[-1] == "err-119"
+    assert result.stdout.splitlines()[0] == f"out-{120 - CAPTURE_TAIL_LINES}"
+    assert result.stdout.splitlines()[-1] == "out-119"
+    assert result.stderr.splitlines()[0] == f"err-{120 - CAPTURE_TAIL_LINES}"
+    assert result.stderr.splitlines()[-1] == "err-119"
+
+
+def test_local_runner_records_oserror_in_stderr_log(tmp_path: Path) -> None:
+    runner = LocalRunner()
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+
+    result = runner.run(
+        command="definitely-not-a-real-binary",
+        args=[],
+        env={},
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+    )
+
+    assert result.exit_code == 127
+    assert stdout_log.read_text() == ""
+    assert stderr_log.read_text() == result.stderr
