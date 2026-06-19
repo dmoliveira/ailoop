@@ -514,7 +514,7 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
         class run_config:
             steps = 5
 
-    app._schedule_card_text = lambda _state: "x\ny\nz\nNext run countdown: in 30 minutes"  # type: ignore[method-assign]
+    app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
 
     text = app._summary_selected_text(FakeState(), width=140)
 
@@ -2163,8 +2163,9 @@ def test_schedule_card_text_uses_selected_schedule_type_not_loop_mode() -> None:
 
     text = app._schedule_card_text(None)
 
-    assert "Schedule type: every X hours" in text
-    assert "Every: every 6 hours" in text
+    assert text.startswith("Sched: hours")
+    assert "every 6" in text
+    assert "next 6h" in text
     assert "Schedule type: fixed" not in text
 
 
@@ -2198,6 +2199,69 @@ def test_actions_status_text_summarizes_available_controls(tmp_path: Path) -> No
     assert "next blocked" in text
 
 
+def test_safety_card_text_compacts_preview_summary() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#safety-autonomy": FakeSelect("level-4"),
+        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#safety-ask-before-commit": FakeCheckbox(True),
+        "#safety-ask-before-push": FakeCheckbox(False),
+        "#safety-auto-commit": FakeCheckbox(True),
+        "#safety-auto-push": FakeCheckbox(False),
+        "#safety-create-backup-branch": FakeCheckbox(True),
+        "#safety-auto-stop-on-limit": FakeCheckbox(True),
+        "#safety-max-runtime": FakeInput("4h"),
+        "#safety-max-files-changed": FakeInput("100"),
+        "#safety-max-commits": FakeInput("10"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._safety_card_text(None)
+
+    assert text.startswith("Safety: Level 4 Edit + Commit")
+    assert "limits 4h/100/10" in text
+    assert "Autonomy level:" not in text
+
+
+def test_notifications_text_compacts_preview_summary() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#notify-start": FakeCheckbox(True),
+        "#notify-success": FakeCheckbox(True),
+        "#notify-failure": FakeCheckbox(True),
+        "#notify-limit": FakeCheckbox(True),
+        "#notify-complete": FakeCheckbox(False),
+        "#notify-terminal": FakeCheckbox(True),
+        "#notify-slack": FakeCheckbox(False),
+        "#notify-email": FakeCheckbox(False),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._notifications_text()
+
+    assert text.startswith("Notify: start on")
+    assert "chan T on/S off/E off" in text
+    assert "Channels:" not in text
+
+
 def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -2223,7 +2287,7 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     state.last_summary = "Modified 6 files and passing tests."
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
-    app._schedule_card_text = lambda _state: "x\ny\nz\nNext run countdown: in 30 minutes"  # type: ignore[method-assign]
+    app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
 
     text = app._loop_summary_text(state)
 

@@ -1388,10 +1388,7 @@ class LoopDashboard(App[None]):
                 return "sel none"
             return "selected none"
         loop_state = state
-        schedule_hint = self._schedule_card_text(loop_state).splitlines()[-1]
-        schedule_hint = compact_countdown_text(
-            schedule_hint.removeprefix("Next run countdown: ")
-        )
+        schedule_hint = compact_countdown_text(self._schedule_countdown_text())
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
         iteration_text = (
             "iter "
@@ -1497,8 +1494,7 @@ class LoopDashboard(App[None]):
         branch_strategy = branch_strategy_label(
             self._select_value("#safety-branch-strategy", "current")
         )
-        next_run = self._schedule_card_text(loop_state).splitlines()[-1]
-        next_run = next_run.removeprefix("Next run countdown: ")
+        next_run = self._schedule_countdown_text()
         return "\n".join(
             [
                 "[b][#4ea3ff]LOOP SUMMARY[/][/]",
@@ -1654,20 +1650,10 @@ class LoopDashboard(App[None]):
         action_text = " · ".join(actions)
         return f"{short_loop_id(loop_state.loop_id)} · {short_status(status)} · {action_text}"
 
-    def _schedule_card_text(self, state: object | None) -> str:
+    def _schedule_countdown_text(self) -> str:
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
         raw_value = self._input_value("#schedule-every", "0")
         start_time = self._input_value("#schedule-start-time", "Now")
-        timezone = self._select_value("#schedule-timezone", "local").upper()
-        label = schedule_type_label(interval_kind, raw_value)
-        type_label = {
-            "continuous": "continuous",
-            "minutes": "every X minutes",
-            "hours": "every X hours",
-            "daily": "daily",
-            "weekly": "weekly",
-            "cron": "cron",
-        }.get(interval_kind, interval_kind)
         countdown = "manual"
         if interval_kind == "minutes":
             countdown = f"in {raw_value} minutes"
@@ -1681,14 +1667,25 @@ class LoopDashboard(App[None]):
             countdown = "cron-driven"
         elif interval_kind == "continuous":
             countdown = "continuous"
-        return "\n".join(
-            [
-                f"Schedule type: {type_label}",
-                f"Every: {label}",
-                f"Start time: {start_time}",
-                f"Timezone: {timezone}",
-                f"Next run countdown: {countdown}",
-            ]
+        return countdown
+
+    def _schedule_card_text(self, state: object | None) -> str:
+        interval_kind = self._select_value("#schedule-type", self._config_interval_value())
+        raw_value = self._input_value("#schedule-every", "0")
+        start_time = self._input_value("#schedule-start-time", "Now")
+        timezone = self._select_value("#schedule-timezone", "local").upper()
+        type_label = {
+            "continuous": "continuous",
+            "minutes": "minutes",
+            "hours": "hours",
+            "daily": "daily",
+            "weekly": "weekly",
+            "cron": "cron",
+        }.get(interval_kind, interval_kind)
+        countdown = self._schedule_countdown_text()
+        return (
+            f"Sched: {type_label} · every {raw_value} · start {start_time} · "
+            f"tz {timezone} · {compact_countdown_text(countdown)}"
         )
 
     def _safety_card_text(self, state: object | None) -> str:
@@ -1710,22 +1707,21 @@ class LoopDashboard(App[None]):
         auto_push = self._checkbox_value("#safety-auto-push", False)
         backup_branch = self._checkbox_value("#safety-create-backup-branch", True)
         auto_stop = self._checkbox_value("#safety-auto-stop-on-limit", True)
-        return "\n".join(
-            [
-                f"Autonomy level: {autonomy}",
-                f"Ask before commit: {'on' if ask_before_commit else 'off'}",
-                f"Ask before push: {'on' if ask_before_push else 'off'}",
-                f"Auto commit: {'on' if auto_commit else 'off'}",
-                f"Auto push: {'on' if auto_push else 'off'}",
-                f"Create backup branch: {'on' if backup_branch else 'off'}",
-                f"Branch strategy: {branch_strategy}",
-                f"Max runtime: {self._input_value('#safety-max-runtime', '4h')}",
-                f"Max files changed: {self._input_value('#safety-max-files-changed', '100')}",
-                f"Max commits: {self._input_value('#safety-max-commits', '10')}",
-                f"Max token usage: {self._input_value('#safety-max-token-usage', 'not tracked')}",
-                f"Max cost: {self._input_value('#safety-max-cost', 'not tracked')}",
-                f"Auto-stop on limit: {'on' if auto_stop else 'off'}",
-            ]
+        ask_commit = "on" if ask_before_commit else "off"
+        ask_push = "on" if ask_before_push else "off"
+        auto_commit_text = "on" if auto_commit else "off"
+        auto_push_text = "on" if auto_push else "off"
+        backup_text = "on" if backup_branch else "off"
+        stop_text = "on" if auto_stop else "off"
+        limits = (
+            f"{self._input_value('#safety-max-runtime', '4h')}/"
+            f"{self._input_value('#safety-max-files-changed', '100')}/"
+            f"{self._input_value('#safety-max-commits', '10')}"
+        )
+        return (
+            f"Safety: {autonomy} · {branch_strategy} · ask C {ask_commit}/P {ask_push} · "
+            f"auto C {auto_commit_text}/P {auto_push_text} · backup {backup_text} · "
+            f"limits {limits} · stop {stop_text}"
         )
 
     def _metrics_today_text(self) -> str:
@@ -1758,26 +1754,16 @@ class LoopDashboard(App[None]):
         notify_terminal = self._checkbox_value("#notify-terminal", True)
         notify_slack = self._checkbox_value("#notify-slack", False)
         notify_email = self._checkbox_value("#notify-email", False)
-        return "\n".join(
-            [
-                (
-                    "Events: "
-                    f"start={'on' if self._checkbox_value('#notify-start', True) else 'off'} · "
-                    f"success={'on' if self._checkbox_value('#notify-success', True) else 'off'} · "
-                    f"failure={'on' if self._checkbox_value('#notify-failure', True) else 'off'}"
-                ),
-                (
-                    "         "
-                    f"limit={'on' if self._checkbox_value('#notify-limit', True) else 'off'} · "
-                    f"complete={'on' if self._checkbox_value('#notify-complete', True) else 'off'}"
-                ),
-                (
-                    "Channels: "
-                    f"terminal={'on' if notify_terminal else 'off'} · "
-                    f"Slack={'on' if notify_slack else 'off'} · "
-                    f"email={'on' if notify_email else 'off'}"
-                ),
-            ]
+        return (
+            "Notify: "
+            f"start {'on' if self._checkbox_value('#notify-start', True) else 'off'} · "
+            f"success {'on' if self._checkbox_value('#notify-success', True) else 'off'} · "
+            f"failure {'on' if self._checkbox_value('#notify-failure', True) else 'off'} · "
+            f"limit {'on' if self._checkbox_value('#notify-limit', True) else 'off'} · "
+            f"complete {'on' if self._checkbox_value('#notify-complete', True) else 'off'} · "
+            f"chan T {'on' if notify_terminal else 'off'}/"
+            f"S {'on' if notify_slack else 'off'}/"
+            f"E {'on' if notify_email else 'off'}"
         )
 
     def _legacy_detail_text(self, state: object | None) -> str:
