@@ -1509,13 +1509,16 @@ class LoopDashboard(App[None]):
                 f"Iterations: {progress}",
                 f"Interval: {interval_label}",
                 f"Next run: {next_run}",
-                f"Branch strategy: {branch_strategy}",
-                f"Autonomy: {autonomy}",
-                f"Runner: {loop_state.run_config.runner}",  # type: ignore[attr-defined]
-                f"Agent: {loop_state.run_config.agent or '-'}",  # type: ignore[attr-defined]
+                f"Branch/Autonomy: {branch_strategy} · {autonomy}",
+                (
+                    f"Runner/Agent: {loop_state.run_config.runner} · "  # type: ignore[attr-defined]
+                    f"{loop_state.run_config.agent or '-'}"  # type: ignore[attr-defined]
+                ),
                 f"Started: {format_timestamp(loop_state.created_at)}",  # type: ignore[attr-defined]
-                f"Updated: {format_timestamp(loop_state.updated_at)}",  # type: ignore[attr-defined]
-                f"Avg runtime: {format_duration(loop_state.average_duration_seconds)}",  # type: ignore[attr-defined]
+                (
+                    f"Updated/Avg: {format_timestamp(loop_state.updated_at)} · "  # type: ignore[attr-defined]
+                    f"{format_duration(loop_state.average_duration_seconds)}"  # type: ignore[attr-defined]
+                ),
                 f"Last result: {loop_state.last_summary or '-'}",  # type: ignore[attr-defined]
             ]
         )
