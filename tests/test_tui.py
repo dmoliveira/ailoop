@@ -1974,3 +1974,113 @@ def test_memory_restore_unarchives_selected_entry(tmp_path: Path) -> None:
     app.action_memory_restore()
     restored = memory.load(entry.id, folder=Path.cwd())
     assert restored.archived is False
+
+
+def test_sync_schedule_with_config_mirrors_non_scheduled_values() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#config-interval": FakeSelect("hours"),
+        "#config-interval-value": FakeInput("3"),
+        "#schedule-type": FakeSelect("continuous"),
+        "#schedule-every": FakeInput("0"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    app._sync_schedule_with_config()
+
+    assert widgets["#schedule-type"].value == "hours"
+    assert widgets["#schedule-every"].value == "3"
+
+
+def test_config_status_text_distinguishes_draft_from_selected_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="cfg-loop")
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-type": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("30"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    assert "Draft config" in app._config_status_text(None)
+    selected_text = app._config_status_text(state)
+    assert "Editing loop cfg-loop" in selected_text
+    assert "schedule every 30 minutes" in selected_text
+
+
+def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeTextArea:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#workspace-root": FakeInput("/tmp/workspace"),
+        "#workspace-include": FakeTextArea("src/**\ntests/**"),
+        "#workspace-exclude": FakeTextArea(".git/**\nnode_modules/**\ndist/**"),
+        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#schedule-type": FakeSelect("minutes"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("45"),
+        "#config-quiet-hours": FakeCheckbox(True),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._workspace_scope_text(None)
+
+    assert "root: /tmp/workspace" in text
+    assert "include: 2 patterns" in text
+    assert "exclude: 3 patterns" in text
+    assert "strategy: branch per iteration" in text
+    assert "schedule: every 45 minutes" in text
+    assert "quiet-hours: on" in text

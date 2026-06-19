@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import shlex
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
@@ -11,7 +14,7 @@ from textual import events, on
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Button, DataTable, Header, Input, Static
+from textual.widgets import Button, Checkbox, DataTable, Header, Input, Select, Static, TextArea
 
 from .memory import MemoryStore
 from .service import LoopService
@@ -19,7 +22,7 @@ from .stats import STATUS_ICONS
 from .tasks import parse_task_file, render_task_file_error
 
 FilterMode = Literal["running", "active", "all"]
-LogKind = Literal["stdout", "stderr", "prompt", "events", "memory"]
+LogKind = Literal["stdout", "stderr", "prompt", "events", "memory", "metrics", "history"]
 MemoryFilter = Literal["all", "favorites", "history", "archived", "presets"]
 
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
@@ -54,13 +57,6 @@ def tail_text(path: Path, lines: int = 400) -> str:
     return "\n".join(chunks[-lines:])
 
 
-def read_events(path: Path, limit: int = 80) -> str:
-    if not path.exists():
-        return "<missing>"
-    rows = path.read_text().splitlines()[-limit:]
-    return "\n".join(rows)
-
-
 def short_status(status: str) -> str:
     return {
         "pause_requested": "pausing",
@@ -79,6 +75,140 @@ def render_progress_text(completed: int, target: int | None, width: int = 4) -> 
     filled = min(width, max(0, round(ratio * width)))
     bar = "█" * filled + "░" * (width - filled)
     return f"{bar} {completed}/{target}"
+
+
+def format_timestamp(value: str | None) -> str:
+    if not value:
+        return "-"
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return value
+
+
+def format_duration(seconds: float | None) -> str:
+    if seconds is None:
+        return "-"
+    total = max(0, int(round(seconds)))
+    hours, rem = divmod(total, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m {secs:02d}s"
+    if minutes:
+        return f"{minutes}m {secs:02d}s"
+    return f"{secs}s"
+
+
+def loop_mode_text(steps: int | None) -> str:
+    return "Infinite" if steps is None else "Fixed Count"
+
+
+def interval_text(pause_seconds: int) -> tuple[str, str]:
+    if pause_seconds <= 0:
+        return "continuous", "0"
+    if pause_seconds % 3600 == 0:
+        return "hours", str(max(1, pause_seconds // 3600))
+    if pause_seconds % 60 == 0:
+        return "minutes", str(max(1, pause_seconds // 60))
+    return "minutes", str(max(1, round(pause_seconds / 60)))
+
+
+def step_status_lines(completed: int, target: int | None, status: str) -> list[str]:
+    if completed <= 0 and status in {"idle", "paused", "stopped"}:
+        return [
+            "[dim]○[/] Build context",
+            "[dim]○[/] Analyse code",
+            "[dim]○[/] Make changes",
+            "[dim]○[/] Validate",
+            "[dim]○[/] Commit",
+            "[dim]○[/] Push",
+        ]
+    if target is not None and completed >= target and status == "completed":
+        return [
+            "[green]●[/] Build context",
+            "[green]●[/] Analyse code",
+            "[green]●[/] Make changes",
+            "[green]●[/] Validate",
+            "[green]●[/] Commit",
+            "[green]●[/] Push",
+        ]
+    return [
+        "[green]●[/] Build context",
+        "[green]●[/] Analyse code",
+        "[green]●[/] Make changes",
+        "[green]●[/] Validate",
+        "[yellow]◐[/] Commit",
+        "[dim]○[/] Push",
+    ]
+
+
+def branch_strategy_label(value: str) -> str:
+    return {
+        "current": "current branch",
+        "new": "new branch",
+        "per-iteration": "branch per iteration",
+    }.get(value, value)
+
+
+def autonomy_label(value: str) -> str:
+    return {
+        "level-1": "Level 1 Observe",
+        "level-2": "Level 2 Suggest",
+        "level-3": "Level 3 Edit",
+        "level-4": "Level 4 Edit + Commit",
+        "level-5": "Level 5 Edit + Commit + Push",
+    }.get(value, value)
+
+
+def schedule_type_label(value: str, raw_value: str) -> str:
+    return {
+        "continuous": "continuous",
+        "minutes": f"every {raw_value} minutes",
+        "hours": f"every {raw_value} hours",
+        "daily": f"daily at {raw_value}",
+        "weekly": f"weekly at {raw_value}",
+        "cron": f"cron {raw_value}",
+    }.get(value, value)
+
+
+def mini_bar(completed: int, total: int, width: int = 12) -> str:
+    if total <= 0:
+        return "░" * width
+    ratio = min(max(completed / total, 0), 1)
+    filled = min(width, max(0, round(ratio * width)))
+    return "█" * filled + "░" * (width - filled)
+
+
+def colorize_log_line(line: str) -> str:
+    if not line.strip():
+        return line
+    line = re.sub(
+        r"^(\d{2}:\d{2}:\d{2})",
+        r"[cyan]\1[/]",
+        line,
+        count=1,
+    )
+    replacements = {
+        "[INFO]": "[green][INFO][/green]",
+        "[PLAN]": "[blue][PLAN][/blue]",
+        "[ANALYZE]": "[blue][ANALYZE][/blue]",
+        "[CHANGE]": "[yellow][CHANGE][/yellow]",
+        "[VALIDATE]": "[green][VALIDATE][/green]",
+        "[COMMIT]": "[magenta][COMMIT][/magenta]",
+        "[PUSH]": "[magenta][PUSH][/magenta]",
+        "[ERROR]": "[red][ERROR][/red]",
+        "[STDERR]": "[red][STDERR][/red]",
+        "[STDOUT]": "[green][STDOUT][/green]",
+        "[ok]": "[green][ok][/green]",
+        "[fail]": "[red][fail][/red]",
+    }
+    for raw, styled in replacements.items():
+        line = line.replace(raw, styled)
+    return line
+
+
+def colorize_log_text(text: str) -> str:
+    return "\n".join(colorize_log_line(line) for line in text.splitlines())
 
 
 class LoopDashboard(App[None]):
@@ -129,12 +259,11 @@ class LoopDashboard(App[None]):
     }
 
     #details {
-        width: 34;
+        width: 38;
         min-width: 30;
-        border: round #1f4f91;
-        padding: 1 1 0 1;
+        padding: 0;
         margin-left: 1;
-        background: #0a1322;
+        overflow-y: auto;
     }
 
     #loops {
@@ -142,10 +271,70 @@ class LoopDashboard(App[None]):
         margin-top: 1;
     }
 
+    #loop-query {
+        margin-top: 1;
+        margin-bottom: 1;
+        border: round #2b3b52;
+        background: #0c1626;
+        color: #dbe7f4;
+    }
+
+    #sidebar_stats {
+        color: #8ea3bf;
+        margin-bottom: 1;
+    }
+
     .panel-title {
         text-style: bold;
         color: #4ea3ff;
         margin-bottom: 1;
+    }
+
+    .section-title {
+        color: #8ea3bf;
+        text-style: bold;
+        margin: 0 0 1 0;
+    }
+
+    .card {
+        border: round #1f4f91;
+        background: #0a1322;
+        padding: 1;
+        margin-bottom: 1;
+    }
+
+    .card-static {
+        border: round #1f4f91;
+        background: #0a1322;
+        padding: 1;
+        margin-bottom: 1;
+        height: auto;
+    }
+
+    .card-row {
+        height: auto;
+    }
+
+    #top_row > .card,
+    #middle_row > .card {
+        width: 1fr;
+        margin-right: 1;
+    }
+
+    #top_row > .card:last-child,
+    #middle_row > .card:last-child {
+        margin-right: 0;
+    }
+
+    #loop_summary,
+    #workspace_scope,
+    #iteration_progress,
+    #iteration_history,
+    #schedule_card,
+    #safety_card,
+    #metrics_today,
+    #notifications_card {
+        height: auto;
     }
 
     .toolbar {
@@ -170,9 +359,67 @@ class LoopDashboard(App[None]):
         border: round #4ea3ff;
     }
 
+    Button:disabled {
+        background: #0b1220;
+        color: #61758f;
+        border: round #223247;
+        text-style: dim;
+    }
+
+    Input:disabled,
+    Select:disabled,
+    Checkbox:disabled {
+        color: #61758f;
+        background: #0b1220;
+        border: round #223247;
+    }
+
     .primary-toolbar Button {
         background: #101b2e;
         border: round #355070;
+    }
+
+    .action-toolbar Button {
+        width: 1fr;
+        min-width: 16;
+    }
+
+    #start-continue {
+        background: #10371f;
+        border: round #1f9d55;
+    }
+
+    #pause {
+        background: #2a2210;
+        border: round #d4a017;
+    }
+
+    #stop,
+    #memory-delete {
+        background: #2a1219;
+        border: round #7f1d1d;
+    }
+
+    #restart,
+    #restart-reset {
+        background: #1d1631;
+        border: round #7c3aed;
+    }
+
+    #next-iteration,
+    #refresh {
+        background: #101b2e;
+        border: round #4ea3ff;
+    }
+
+    #run-loop,
+    #save-config {
+        width: 1fr;
+    }
+
+    #run-loop {
+        background: #10371f;
+        border: round #1f9d55;
     }
 
     .log-toolbar Button {
@@ -191,7 +438,6 @@ class LoopDashboard(App[None]):
     }
 
     .primary-toolbar #stop,
-    .primary-toolbar #remove,
     .memory-toolbar #memory-delete {
         background: #2a1219;
         border: round #7f1d1d;
@@ -217,6 +463,72 @@ class LoopDashboard(App[None]):
         color: #dbe7f4;
     }
 
+    #config-prompt {
+        height: 10;
+        margin-bottom: 1;
+        border: round #2b3b52;
+        background: #091322;
+    }
+
+    #workspace-include,
+    #workspace-exclude {
+        height: 5;
+        margin-bottom: 1;
+        border: round #2b3b52;
+        background: #091322;
+    }
+
+    .form-row {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    .field-group {
+        width: 1fr;
+        margin-right: 1;
+    }
+
+    .field-group:last-child {
+        margin-right: 0;
+    }
+
+    .field-group Input,
+    .field-group Select,
+    .field-group Checkbox {
+        width: 1fr;
+    }
+
+    .right-card {
+        border: round #1f4f91;
+        background: #0a1322;
+        padding: 1;
+        margin-bottom: 1;
+        height: auto;
+    }
+
+    .right-card .field-group,
+    .right-card .compact-field {
+        margin-right: 1;
+    }
+
+    .right-card Checkbox {
+        margin-bottom: 1;
+    }
+
+    .mini-note {
+        color: #8ea3bf;
+        margin-top: 1;
+    }
+
+    .compact-field {
+        width: 12;
+        margin-right: 1;
+    }
+
+    .compact-field:last-child {
+        margin-right: 0;
+    }
+
     #summary_bar,
     #help_bar,
     #log_meta {
@@ -235,9 +547,12 @@ class LoopDashboard(App[None]):
         margin-bottom: 1;
     }
 
-    #detail_view {
+    #log_card {
         height: 1fr;
-        padding: 0 0 1 0;
+    }
+
+    #log_view {
+        min-height: 16;
     }
 
     #help_bar {
@@ -284,6 +599,7 @@ class LoopDashboard(App[None]):
 
     selected_loop_id: reactive[str | None] = reactive(None)
     filter_mode: reactive[FilterMode] = reactive("running")
+    loop_query: reactive[str] = reactive("")
     log_kind: reactive[LogKind] = reactive("stdout")
     memory_filter: reactive[MemoryFilter] = reactive("all")
     memory_label: reactive[str | None] = reactive(None)
@@ -306,13 +622,16 @@ class LoopDashboard(App[None]):
         from .config import load_app_config
 
         app_config = load_app_config(config_path)
+        self.app_config = app_config
         self.service = LoopService(Path(app_config.paths.state_dir), emit_output=False)
         self.memory = MemoryStore(Path(app_config.paths.state_dir))
+        self._config_bound_loop_id: str | None = None
         try:
             self.launch_cwd = Path(os.getcwd())
         except FileNotFoundError:
             self.launch_cwd = None
             self.memory_all_folders = True
+        self.current_branch = self._detect_branch()
         self.initial_loop_id = loop_id
         if loop_id is not None:
             self.filter_mode = "all"
@@ -325,7 +644,85 @@ class LoopDashboard(App[None]):
     def _can_toggle_memory_scope(self) -> bool:
         return self.launch_cwd is not None
 
+    def _detect_branch(self) -> str:
+        if self.launch_cwd is None:
+            return "-"
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=self.launch_cwd,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return "-"
+        return result.stdout.strip() or "-"
+
+    def _default_run_config(self) -> tuple[str, object]:
+        runner_name = self.app_config.default_runner
+        runner = self.app_config.runners[runner_name]
+        return runner_name, runner
+
+    def _default_prompt_text(self) -> str:
+        return (
+            "Review the workspace, build context, make safe improvements, validate changes, "
+            "and leave a concise summary."
+        )
+
+    def _config_form_defaults(self) -> dict[str, object]:
+        runner_name, _runner = self._default_run_config()
+        pause_seconds = self.app_config.loop.pause_seconds
+        interval_kind, interval_value = interval_text(pause_seconds)
+        return {
+            "prompt": self._default_prompt_text(),
+            "mode": "fixed" if self.app_config.loop.steps is not None else "infinite",
+            "iterations": str(self.app_config.loop.steps or 5),
+            "interval": interval_kind,
+            "interval_value": interval_value,
+            "quiet_hours": False,
+            "quiet_start": "22:00",
+            "quiet_end": "07:00",
+            "jitter": False,
+            "jitter_value": "0-5",
+            "runner": runner_name,
+            "schedule_type": "continuous",
+            "schedule_every": interval_value,
+            "schedule_start": "Now",
+            "schedule_timezone": "local",
+            "autonomy": "level-3",
+            "branch_strategy": "current",
+            "ask_before_commit": True,
+            "ask_before_push": True,
+            "auto_commit": False,
+            "auto_push": False,
+            "create_backup_branch": True,
+            "auto_stop_on_limit": True,
+            "max_runtime": "4h",
+            "max_files_changed": "100",
+            "max_commits": "10",
+            "max_token_usage": "not tracked",
+            "max_cost": "not tracked",
+            "notify_start": True,
+            "notify_success": True,
+            "notify_failure": True,
+            "notify_limit": True,
+            "notify_complete": True,
+            "notify_terminal": True,
+            "notify_slack": False,
+            "notify_email": False,
+        }
+
+    def _workspace_form_defaults(self) -> dict[str, str]:
+        return {
+            "root": str(self.launch_cwd or Path.home()),
+            "include": "src/**\ntests/**\ndocs/**",
+            "exclude": ".git/**\n.venv/**\n.ailoop/**\nnode_modules/**",
+        }
+
     def compose(self) -> ComposeResult:
+        defaults = self._config_form_defaults()
+        workspace_defaults = self._workspace_form_defaults()
         yield Header(show_clock=True)
         yield Static("loading...", id="summary_bar")
         with Horizontal(id="main"):
@@ -335,47 +732,322 @@ class LoopDashboard(App[None]):
                     yield Button("g running", id="filter-running")
                     yield Button("a active", id="filter-active")
                     yield Button("l all", id="filter-all")
+                yield Input(placeholder="Search loops...", id="loop-query")
+                yield Static(id="sidebar_stats")
                 yield DataTable(id="loops", zebra_stripes=True)
             with Vertical(id="content"):
-                with Horizontal(classes="toolbar primary-toolbar"):
-                    yield Button("⟳ Refresh", id="refresh")
-                    yield Button("⏸ Pause", id="pause")
-                    yield Button("▶ Resume", id="resume")
-                    yield Button("⏹ Stop", id="stop")
-                    yield Button("✖ Delete", id="remove")
-                with Horizontal(classes="toolbar log-toolbar"):
-                    yield Button("1 stdout", id="log-stdout")
-                    yield Button("2 stderr", id="log-stderr")
-                    yield Button("3 prompt", id="log-prompt")
-                    yield Button("4 events", id="log-events")
-                with Horizontal(
-                    id="memory-filter-toolbar",
-                    classes="toolbar memory-filter-toolbar",
-                ):
-                    yield Button("5 memory", id="log-memory")
-                    yield Button("6 favorites", id="log-memory-favorites")
-                    yield Button("7 history", id="log-memory-history")
-                    yield Button("m presets", id="log-memory-presets")
-                    yield Button("0 archived", id="log-memory-archived")
-                with Horizontal(
-                    id="memory-action-toolbar",
-                    classes="toolbar memory-action-toolbar",
-                ):
-                    yield Button("b prev label", id="memory-label-prev")
-                    yield Button("n next label", id="memory-label-next")
-                    yield Button("c clear label", id="memory-label-clear")
-                    yield Button("o folders", id="memory-scope-toggle")
-                    yield Button("8 replay", id="memory-replay")
-                    yield Button("9 favorite", id="memory-favorite")
-                    yield Button("v restore", id="memory-restore")
-                    yield Button("z archive", id="memory-archive")
-                    yield Button("x delete", id="memory-delete")
-                yield Input(placeholder=self._memory_query_placeholder(), id="memory-query")
-                yield Static(id="log_meta")
-                yield Static(id="log_view")
+                with Horizontal(id="top_row", classes="card-row"):
+                    yield Static(id="loop_summary", classes="card-static")
+                    with Vertical(id="actions_card", classes="card"):
+                        yield Static("ACTIONS", classes="panel-title")
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("▶ Start / Continue", id="start-continue")
+                            yield Button("⏸ Pause", id="pause")
+                            yield Button("⏹ Stop", id="stop")
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("↻ Restart", id="restart")
+                            yield Button("↺ Restart + Reset", id="restart-reset")
+                            yield Button("≫ Next Iteration", id="next-iteration")
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("⟳ Refresh", id="refresh")
+                with Horizontal(id="middle_row", classes="card-row"):
+                    with Vertical(id="config_card", classes="card"):
+                        yield Static("AI LOOP CONFIG", classes="panel-title")
+                        yield TextArea(defaults["prompt"], id="config-prompt")
+                        with Horizontal(classes="form-row"):
+                            with Vertical(classes="field-group"):
+                                yield Static("Loop mode", classes="section-title")
+                                yield Select(
+                                    [
+                                        ("Fixed Count", "fixed"),
+                                        ("Infinite", "infinite"),
+                                        ("Scheduled", "scheduled"),
+                                    ],
+                                    value=str(defaults["mode"]),
+                                    id="config-mode",
+                                )
+                            with Vertical(classes="field-group"):
+                                yield Static("Iterations", classes="section-title")
+                                yield Input(str(defaults["iterations"]), id="config-iterations")
+                        with Horizontal(classes="form-row"):
+                            with Vertical(classes="field-group"):
+                                yield Static("Interval", classes="section-title")
+                                yield Select(
+                                    [
+                                        ("Continuous", "continuous"),
+                                        ("Every X minutes", "minutes"),
+                                        ("Every X hours", "hours"),
+                                        ("Daily", "daily"),
+                                        ("Weekly", "weekly"),
+                                        ("Cron", "cron"),
+                                    ],
+                                    value=str(defaults["interval"]),
+                                    id="config-interval",
+                                )
+                            with Vertical(classes="field-group"):
+                                yield Static("Value", classes="section-title")
+                                yield Input(
+                                    str(defaults["interval_value"]),
+                                    id="config-interval-value",
+                                )
+                        with Horizontal(classes="form-row"):
+                            with Vertical(classes="field-group"):
+                                yield Checkbox(
+                                    "Quiet hours",
+                                    value=bool(defaults["quiet_hours"]),
+                                    id="config-quiet-hours",
+                                )
+                            with Vertical(classes="compact-field"):
+                                yield Input(
+                                    str(defaults["quiet_start"]),
+                                    placeholder="22:00",
+                                    id="config-quiet-start",
+                                )
+                            with Vertical(classes="compact-field"):
+                                yield Input(
+                                    str(defaults["quiet_end"]),
+                                    placeholder="07:00",
+                                    id="config-quiet-end",
+                                )
+                            with Vertical(classes="field-group"):
+                                yield Checkbox(
+                                    "Jitter",
+                                    value=bool(defaults["jitter"]),
+                                    id="config-jitter",
+                                )
+                            with Vertical(classes="compact-field"):
+                                yield Input(
+                                    str(defaults["jitter_value"]),
+                                    placeholder="0-5",
+                                    id="config-jitter-value",
+                                )
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("Save Config", id="save-config")
+                            yield Button("Run Loop", id="run-loop")
+                        yield Static(id="config-status", classes="mini-note")
+                    with Vertical(id="workspace_card", classes="card"):
+                        yield Static("WORKSPACE & SCOPE", classes="panel-title")
+                        yield Static("Root directory", classes="section-title")
+                        yield Input(workspace_defaults["root"], id="workspace-root")
+                        yield Static("Included paths", classes="section-title")
+                        yield TextArea(workspace_defaults["include"], id="workspace-include")
+                        yield Static("Excluded paths", classes="section-title")
+                        yield TextArea(workspace_defaults["exclude"], id="workspace-exclude")
+                        yield Static(id="workspace_scope", classes="mini-note")
+                with Vertical(id="log_card", classes="card"):
+                    yield Static("LOGS & OBSERVABILITY", classes="panel-title")
+                    with Horizontal(classes="toolbar log-toolbar"):
+                        yield Button("1 stdout", id="log-stdout")
+                        yield Button("2 stderr", id="log-stderr")
+                        yield Button("3 prompt", id="log-prompt")
+                        yield Button("4 events", id="log-events")
+                        yield Button("5 metrics", id="log-metrics")
+                        yield Button("6 history", id="log-history")
+                    with Horizontal(
+                        id="memory-filter-toolbar",
+                        classes="toolbar memory-filter-toolbar",
+                    ):
+                        yield Button("7 memory", id="log-memory")
+                        yield Button("f favorites", id="log-memory-favorites")
+                        yield Button("h mem-history", id="log-memory-history")
+                        yield Button("m presets", id="log-memory-presets")
+                        yield Button("0 archived", id="log-memory-archived")
+                    with Horizontal(
+                        id="memory-action-toolbar",
+                        classes="toolbar memory-action-toolbar",
+                    ):
+                        yield Button("b prev label", id="memory-label-prev")
+                        yield Button("n next label", id="memory-label-next")
+                        yield Button("c clear label", id="memory-label-clear")
+                        yield Button("o folders", id="memory-scope-toggle")
+                        yield Button("8 replay", id="memory-replay")
+                        yield Button("9 favorite", id="memory-favorite")
+                        yield Button("v restore", id="memory-restore")
+                        yield Button("z archive", id="memory-archive")
+                        yield Button("x delete", id="memory-delete")
+                    yield Input(placeholder=self._memory_query_placeholder(), id="memory-query")
+                    yield Static(id="log_meta")
+                    yield Static(id="log_view")
             with Vertical(id="details"):
-                yield Static("DETAILS", classes="panel-title")
-                yield Static(id="detail_view")
+                yield Static(id="iteration_progress", classes="card-static")
+                yield Static(id="iteration_history", classes="card-static")
+                with Vertical(id="schedule_card", classes="right-card"):
+                    yield Static("SCHEDULING", classes="panel-title")
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Schedule type", classes="section-title")
+                            yield Select(
+                                [
+                                    ("Continuous", "continuous"),
+                                    ("Every X minutes", "minutes"),
+                                    ("Every X hours", "hours"),
+                                    ("Daily", "daily"),
+                                    ("Weekly", "weekly"),
+                                    ("Cron", "cron"),
+                                ],
+                                value=str(defaults["schedule_type"]),
+                                id="schedule-type",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Every", classes="section-title")
+                            yield Input(
+                                str(defaults["schedule_every"]),
+                                id="schedule-every",
+                            )
+                        with Vertical(classes="field-group"):
+                            yield Static("Start time", classes="section-title")
+                            yield Input(
+                                str(defaults["schedule_start"]),
+                                id="schedule-start-time",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Timezone", classes="section-title")
+                            yield Select(
+                                [
+                                    ("Local", "local"),
+                                    ("UTC", "utc"),
+                                ],
+                                value=str(defaults["schedule_timezone"]),
+                                id="schedule-timezone",
+                            )
+                    yield Static(id="schedule-preview", classes="mini-note")
+                with Vertical(id="safety_card", classes="right-card"):
+                    yield Static("BEHAVIOUR & SAFETY", classes="panel-title")
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Autonomy level", classes="section-title")
+                            yield Select(
+                                [
+                                    ("Level 1 Observe", "level-1"),
+                                    ("Level 2 Suggest", "level-2"),
+                                    ("Level 3 Edit", "level-3"),
+                                    ("Level 4 Edit + Commit", "level-4"),
+                                    ("Level 5 Edit + Commit + Push", "level-5"),
+                                ],
+                                value=str(defaults["autonomy"]),
+                                id="safety-autonomy",
+                            )
+                        with Vertical(classes="field-group"):
+                            yield Static("Branch strategy", classes="section-title")
+                            yield Select(
+                                [
+                                    ("Current branch", "current"),
+                                    ("New branch", "new"),
+                                    ("Branch per iteration", "per-iteration"),
+                                ],
+                                value=str(defaults["branch_strategy"]),
+                                id="safety-branch-strategy",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Checkbox(
+                                "Ask before commit",
+                                value=bool(defaults["ask_before_commit"]),
+                                id="safety-ask-before-commit",
+                            )
+                            yield Checkbox(
+                                "Ask before push",
+                                value=bool(defaults["ask_before_push"]),
+                                id="safety-ask-before-push",
+                            )
+                            yield Checkbox(
+                                "Auto commit",
+                                value=bool(defaults["auto_commit"]),
+                                id="safety-auto-commit",
+                            )
+                            yield Checkbox(
+                                "Auto push",
+                                value=bool(defaults["auto_push"]),
+                                id="safety-auto-push",
+                            )
+                        with Vertical(classes="field-group"):
+                            yield Checkbox(
+                                "Create backup branch",
+                                value=bool(defaults["create_backup_branch"]),
+                                id="safety-create-backup-branch",
+                            )
+                            yield Checkbox(
+                                "Auto-stop on limit",
+                                value=bool(defaults["auto_stop_on_limit"]),
+                                id="safety-auto-stop-on-limit",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Max runtime", classes="section-title")
+                            yield Input(str(defaults["max_runtime"]), id="safety-max-runtime")
+                        with Vertical(classes="field-group"):
+                            yield Static("Max files changed", classes="section-title")
+                            yield Input(
+                                str(defaults["max_files_changed"]),
+                                id="safety-max-files-changed",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Max commits", classes="section-title")
+                            yield Input(str(defaults["max_commits"]), id="safety-max-commits")
+                        with Vertical(classes="field-group"):
+                            yield Static("Max token usage", classes="section-title")
+                            yield Input(
+                                str(defaults["max_token_usage"]),
+                                id="safety-max-token-usage",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Max cost", classes="section-title")
+                            yield Input(str(defaults["max_cost"]), id="safety-max-cost")
+                    yield Static(id="safety-preview", classes="mini-note")
+                yield Static(id="metrics_today", classes="card-static")
+                with Vertical(id="notifications_card", classes="right-card"):
+                    yield Static("NOTIFICATIONS", classes="panel-title")
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Checkbox(
+                                "On iteration start",
+                                value=bool(defaults["notify_start"]),
+                                id="notify-start",
+                            )
+                            yield Checkbox(
+                                "On iteration success",
+                                value=bool(defaults["notify_success"]),
+                                id="notify-success",
+                            )
+                            yield Checkbox(
+                                "On iteration failure",
+                                value=bool(defaults["notify_failure"]),
+                                id="notify-failure",
+                            )
+                        with Vertical(classes="field-group"):
+                            yield Checkbox(
+                                "On limit reached",
+                                value=bool(defaults["notify_limit"]),
+                                id="notify-limit",
+                            )
+                            yield Checkbox(
+                                "On loop complete",
+                                value=bool(defaults["notify_complete"]),
+                                id="notify-complete",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="field-group"):
+                            yield Static("Channels", classes="section-title")
+                            yield Checkbox(
+                                "terminal",
+                                value=bool(defaults["notify_terminal"]),
+                                id="notify-terminal",
+                            )
+                            yield Checkbox(
+                                "Slack",
+                                value=bool(defaults["notify_slack"]),
+                                id="notify-slack",
+                            )
+                            yield Checkbox(
+                                "email",
+                                value=bool(defaults["notify_email"]),
+                                id="notify-email",
+                            )
+                    yield Static(id="notifications-preview", classes="mini-note")
         yield Static("loading...", id="help_bar")
 
     def on_mount(self) -> None:
@@ -391,6 +1063,218 @@ class LoopDashboard(App[None]):
     def _sync_layout_mode(self, width: int | None = None) -> None:
         actual_width = self.size.width if width is None else width
         self.set_class(actual_width <= COMPACT_LAYOUT_WIDTH, "compact-layout")
+
+    def _config_mode_value(self) -> str:
+        try:
+            return str(self.query_one("#config-mode", Select).value or "fixed")
+        except Exception:
+            return "fixed"
+
+    def _config_interval_value(self) -> str:
+        try:
+            return str(self.query_one("#config-interval", Select).value or "continuous")
+        except Exception:
+            return "continuous"
+
+    def _config_interval_seconds(self) -> int:
+        interval_kind = self._config_interval_value()
+        raw_value = self.query_one("#config-interval-value", Input).value.strip() or "0"
+        if interval_kind == "continuous":
+            return 0
+        try:
+            value = max(0, int(raw_value))
+        except ValueError:
+            return 0
+        if interval_kind == "hours":
+            return value * 3600
+        if interval_kind == "minutes":
+            return value * 60
+        return 0
+
+    def _form_supports_run(self) -> bool:
+        return self._config_mode_value() != "scheduled" and self._config_interval_value() in {
+            "continuous",
+            "minutes",
+            "hours",
+        }
+
+    def _sync_form_controls(self) -> None:
+        mode = self._config_mode_value()
+        interval = self._config_interval_value()
+        schedule_type = self._select_value("#schedule-type", interval)
+        quiet_hours = self._checkbox_value("#config-quiet-hours", False)
+        jitter_enabled = self._checkbox_value("#config-jitter", False)
+
+        def set_disabled(selector: str, disabled: bool, widget_type: object) -> None:
+            try:
+                self.query_one(selector, widget_type).disabled = disabled  # type: ignore[attr-defined]
+            except Exception:
+                return
+
+        set_disabled("#config-iterations", mode != "fixed", Input)
+        set_disabled("#config-interval-value", interval == "continuous", Input)
+        set_disabled("#config-quiet-start", not quiet_hours, Input)
+        set_disabled("#config-quiet-end", not quiet_hours, Input)
+        set_disabled("#config-jitter-value", not jitter_enabled, Input)
+        set_disabled("#schedule-every", schedule_type == "continuous", Input)
+        set_disabled("#schedule-start-time", schedule_type == "continuous", Input)
+        set_disabled("#schedule-timezone", schedule_type == "continuous", Select)
+
+    def _sync_schedule_with_config(self) -> None:
+        mode = self._config_mode_value()
+        interval = self._config_interval_value()
+        interval_value = self._input_value("#config-interval-value", "0")
+        if mode == "scheduled":
+            return
+        try:
+            self.query_one("#schedule-type", Select).value = interval
+            self.query_one("#schedule-every", Input).value = interval_value
+        except Exception:
+            return
+
+    def _select_value(self, selector: str, default: str) -> str:
+        try:
+            return str(self.query_one(selector, Select).value or default)
+        except Exception:
+            return default
+
+    def _input_value(self, selector: str, default: str) -> str:
+        try:
+            value = self.query_one(selector, Input).value.strip()
+        except Exception:
+            return default
+        return value or default
+
+    def _textarea_value(self, selector: str, default: str) -> str:
+        try:
+            value = self.query_one(selector, TextArea).text.strip()
+        except Exception:
+            return default
+        return value or default
+
+    def _checkbox_value(self, selector: str, default: bool) -> bool:
+        try:
+            return bool(self.query_one(selector, Checkbox).value)
+        except Exception:
+            return default
+
+    def _sync_config_form_from_state(self, state: object | None) -> None:
+        if state is None:
+            bound_id = "__defaults__"
+            if self._config_bound_loop_id == bound_id:
+                return
+            values = self._config_form_defaults()
+        else:
+            loop_state = state
+            bound_id = loop_state.loop_id  # type: ignore[attr-defined]
+            if self._config_bound_loop_id == bound_id:
+                return
+            interval_kind, interval_value = interval_text(loop_state.run_config.pause_seconds)  # type: ignore[attr-defined]
+            values = {
+                "prompt": loop_state.run_config.prompt,  # type: ignore[attr-defined]
+                "mode": "fixed" if loop_state.run_config.steps is not None else "infinite",  # type: ignore[attr-defined]
+                "iterations": str(loop_state.run_config.steps or 5),  # type: ignore[attr-defined]
+                "interval": interval_kind,
+                "interval_value": interval_value,
+                "quiet_hours": False,
+                "quiet_start": "22:00",
+                "quiet_end": "07:00",
+                "jitter": False,
+                "jitter_value": "0-5",
+            }
+        self.query_one("#config-prompt", TextArea).text = str(values["prompt"])
+        self.query_one("#config-mode", Select).value = str(values["mode"])
+        self.query_one("#config-iterations", Input).value = str(values["iterations"])
+        self.query_one("#config-interval", Select).value = str(values["interval"])
+        self.query_one("#config-interval-value", Input).value = str(values["interval_value"])
+        self.query_one("#config-quiet-hours", Checkbox).value = bool(values["quiet_hours"])
+        self.query_one("#config-quiet-start", Input).value = str(values["quiet_start"])
+        self.query_one("#config-quiet-end", Input).value = str(values["quiet_end"])
+        self.query_one("#config-jitter", Checkbox).value = bool(values["jitter"])
+        self.query_one("#config-jitter-value", Input).value = str(values["jitter_value"])
+        try:
+            self.query_one("#schedule-type", Select).value = str(values["interval"])
+            self.query_one("#schedule-every", Input).value = str(values["interval_value"])
+        except Exception:
+            pass
+        self._config_bound_loop_id = bound_id
+
+    def _build_run_config_from_form(self, state: object | None = None):
+        prompt_widget = self.query_one("#config-prompt", TextArea)
+        prompt = prompt_widget.text.strip() or self._default_prompt_text()
+        mode = self._config_mode_value()
+        try:
+            iterations = max(
+                1,
+                int(self.query_one("#config-iterations", Input).value.strip() or "1"),
+            )
+        except ValueError:
+            iterations = 1
+        if state is None:
+            runner_name, runner = self._default_run_config()
+            agent = self.app_config.default_agent
+            continue_on_error = self.app_config.loop.continue_on_error
+            retry_count = self.app_config.loop.retry_count
+            pre_prompt_enabled = self.app_config.prompt.pre_prompt_enabled
+            attach_agent_file = self.app_config.prompt.attach_agent_file
+            pre_prompt = self.app_config.prompt.pre_prompt
+            agent_file = self.app_config.paths.agent_file
+            runner_command = runner.command
+            runner_args = list(runner.args)
+            runner_env = dict(runner.env)
+            task_file = self.app_config.tasks.file
+            stop_when_tasks_complete = self.app_config.tasks.stop_when_complete
+            max_doing = self.app_config.tasks.max_doing
+        else:
+            loop_state = state
+            runner_name = loop_state.run_config.runner  # type: ignore[attr-defined]
+            agent = loop_state.run_config.agent  # type: ignore[attr-defined]
+            continue_on_error = loop_state.run_config.continue_on_error  # type: ignore[attr-defined]
+            retry_count = loop_state.run_config.retry_count  # type: ignore[attr-defined]
+            pre_prompt_enabled = loop_state.run_config.pre_prompt_enabled  # type: ignore[attr-defined]
+            attach_agent_file = loop_state.run_config.attach_agent_file  # type: ignore[attr-defined]
+            pre_prompt = loop_state.run_config.pre_prompt  # type: ignore[attr-defined]
+            agent_file = loop_state.run_config.agent_file  # type: ignore[attr-defined]
+            runner_command = loop_state.run_config.runner_command  # type: ignore[attr-defined]
+            runner_args = list(loop_state.run_config.runner_args)  # type: ignore[attr-defined]
+            runner_env = dict(loop_state.run_config.runner_env)  # type: ignore[attr-defined]
+            task_file = loop_state.run_config.task_file  # type: ignore[attr-defined]
+            stop_when_tasks_complete = loop_state.run_config.stop_when_tasks_complete  # type: ignore[attr-defined]
+            max_doing = loop_state.run_config.max_doing  # type: ignore[attr-defined]
+        from .models import LoopRunConfig
+
+        return LoopRunConfig(
+            prompt=prompt,
+            runner=runner_name,
+            agent=agent,
+            steps=iterations if mode == "fixed" else None,
+            pause_seconds=self._config_interval_seconds(),
+            continue_on_error=continue_on_error,
+            retry_count=retry_count,
+            pre_prompt_enabled=pre_prompt_enabled,
+            attach_agent_file=attach_agent_file,
+            pre_prompt=pre_prompt,
+            agent_file=agent_file,
+            runner_command=runner_command,
+            runner_args=runner_args,
+            runner_env=runner_env,
+            task_file=task_file,
+            stop_when_tasks_complete=stop_when_tasks_complete,
+            max_doing=max_doing,
+        )
+
+    def _status_markup(self, status: str) -> str:
+        color = {
+            "running": "green",
+            "pause_requested": "yellow",
+            "paused": "yellow",
+            "stop_requested": "red",
+            "stopped": "red",
+            "failed": "red",
+            "completed": "cyan",
+            "idle": "blue",
+        }.get(status, "white")
+        return f"[{color}]{short_status(status)}[/]"
 
     def _render_summary_bar(self) -> None:
         if not self.is_mounted:
@@ -416,6 +1300,16 @@ class LoopDashboard(App[None]):
         except Exception:
             return
 
+    def _render_sidebar_stats(self, states: list[object]) -> None:
+        try:
+            sidebar_stats = self.query_one("#sidebar_stats", Static)
+        except Exception:
+            return
+        query = self.loop_query or "-"
+        sidebar_stats.update(
+            f"visible {len(states)} · filter {self.filter_mode} · query {query}"
+        )
+
     def _summary_bar_text(
         self,
         total: int,
@@ -429,6 +1323,10 @@ class LoopDashboard(App[None]):
         actual_width = width or 0
         compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         selected_text = self._summary_selected_text(state, width=actual_width)
+        branch_strategy = branch_strategy_label(
+            self._select_value("#safety-branch-strategy", "current")
+        )
+        autonomy = autonomy_label(self._select_value("#safety-autonomy", "level-3"))
         if compact:
             base = f"all {total} · act {active} · run {running} · pause {paused} · fail {failed}"
         else:
@@ -439,10 +1337,16 @@ class LoopDashboard(App[None]):
         if self.log_kind == "memory":
             if compact:
                 return f"{base} · f {self.filter_mode} · {selected_text}"
-            return f"{base} · filter {self.filter_mode} · {selected_text}"
+            return (
+                f"{base} · filter {self.filter_mode} · {branch_strategy} · "
+                f"{autonomy} · {selected_text}"
+            )
         if compact:
             return f"{base} · f {self.filter_mode} · {self.log_kind} · {selected_text}"
-        return f"{base} · filter {self.filter_mode} · log {self.log_kind} · {selected_text}"
+        return (
+            f"{base} · filter {self.filter_mode} · log {self.log_kind} · "
+            f"{branch_strategy} · {autonomy} · {selected_text}"
+        )
 
     def _summary_selected_text(self, state: object | None, width: int | None = None) -> str:
         actual_width = width or 0
@@ -465,9 +1369,28 @@ class LoopDashboard(App[None]):
             if compact:
                 return "sel none"
             return "selected none"
+        loop_state = state
+        branch_strategy = branch_strategy_label(
+            self._select_value("#safety-branch-strategy", "current")
+        )
+        schedule_hint = self._schedule_card_text(loop_state).splitlines()[-1]
+        target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        iteration_text = (
+            "iter "
+            f"{loop_state.current_iteration or loop_state.completed_iterations}/"  # type: ignore[attr-defined]
+            f"{target or '∞'}"
+        )
         if compact:
-            return f"sel {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
-        return f"selected {short_loop_id(state.loop_id)} · {short_status(state.status)}"  # type: ignore[attr-defined]
+            return (
+                f"sel {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
+                f"{short_status(loop_state.status)} · "  # type: ignore[attr-defined]
+                f"{iteration_text}"
+            )
+        return (
+            f"selected {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
+            f"{short_status(loop_state.status)} · {iteration_text} · "  # type: ignore[attr-defined]
+            f"{schedule_hint} · {branch_strategy}"
+        )
 
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
@@ -532,13 +1455,389 @@ class LoopDashboard(App[None]):
             f"actions {action_text}"
         )
 
+    def _loop_summary_text(self, state: object | None) -> str:
+        if state is None:
+            return (
+                "[b][#4ea3ff]LOOP SUMMARY[/][/]\n\nNo loop selected.\n"
+                "Use the left sidebar to choose a loop or run a new one from the config panel."
+            )
+        loop_state = state
+        target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        progress = render_progress_text(loop_state.completed_iterations, target, width=8)  # type: ignore[attr-defined]
+        interval_kind, interval_value = interval_text(loop_state.run_config.pause_seconds)  # type: ignore[attr-defined]
+        interval_label = {
+            "continuous": "continuous",
+            "minutes": f"every {interval_value} minutes",
+            "hours": f"every {interval_value} hours",
+        }.get(interval_kind, interval_kind)
+        autonomy = autonomy_label(self._select_value("#safety-autonomy", "level-3"))
+        branch_strategy = branch_strategy_label(
+            self._select_value("#safety-branch-strategy", "current")
+        )
+        next_run = self._schedule_card_text(loop_state).splitlines()[-1]
+        next_run = next_run.removeprefix("Next run countdown: ")
+        return "\n".join(
+            [
+                "[b][#4ea3ff]LOOP SUMMARY[/][/]",
+                "",
+                f"Name: {loop_state.loop_id}",  # type: ignore[attr-defined]
+                f"State: {self._status_markup(loop_state.status)}",  # type: ignore[attr-defined]
+                f"Mode: {loop_mode_text(target)}",
+                f"Iterations: {progress}",
+                f"Interval: {interval_label}",
+                f"Next run: {next_run}",
+                f"Branch strategy: {branch_strategy}",
+                f"Autonomy: {autonomy}",
+                f"Runner: {loop_state.run_config.runner}",  # type: ignore[attr-defined]
+                f"Agent: {loop_state.run_config.agent or '-'}",  # type: ignore[attr-defined]
+                f"Started: {format_timestamp(loop_state.created_at)}",  # type: ignore[attr-defined]
+                f"Updated: {format_timestamp(loop_state.updated_at)}",  # type: ignore[attr-defined]
+                f"Avg runtime: {format_duration(loop_state.average_duration_seconds)}",  # type: ignore[attr-defined]
+                f"Last result: {loop_state.last_summary or '-'}",  # type: ignore[attr-defined]
+            ]
+        )
+
+    def _workspace_scope_text(self, state: object | None) -> str:
+        root = self._input_value("#workspace-root", str(self.launch_cwd or Path.home()))
+        include_paths = self._textarea_value("#workspace-include", "src/**\ntests/**\ndocs/**")
+        exclude_paths = self._textarea_value(
+            "#workspace-exclude",
+            ".git/**\n.venv/**\n.ailoop/**\nnode_modules/**",
+        )
+        branch_strategy = branch_strategy_label(
+            self._select_value("#safety-branch-strategy", "current")
+        )
+        schedule_type = self._select_value("#schedule-type", self._config_interval_value())
+        schedule_scope = schedule_type_label(
+            schedule_type,
+            self._input_value("#schedule-every", "0"),
+        )
+        quiet_hours = "on" if self._checkbox_value("#config-quiet-hours", False) else "off"
+        include_count = len([line for line in include_paths.splitlines() if line.strip()])
+        exclude_count = len([line for line in exclude_paths.splitlines() if line.strip()])
+        return "\n".join(
+            [
+                f"root: {root}",
+                f"include: {include_count} patterns",
+                f"exclude: {exclude_count} patterns",
+                f"branch: {self.current_branch}",
+                f"strategy: {branch_strategy}",
+                f"schedule: {schedule_scope}",
+                f"quiet-hours: {quiet_hours}",
+            ]
+        )
+
+    def _config_status_text(self, state: object | None) -> str:
+        mode = self._config_mode_value()
+        interval = self._config_interval_value()
+        schedule_type = self._select_value("#schedule-type", interval)
+        schedule_scope = schedule_type_label(
+            schedule_type,
+            self._input_value("#schedule-every", "0"),
+        )
+        if state is None:
+            return (
+                "Draft config · new loop launch · "
+                f"mode {mode} · schedule {schedule_scope}"
+            )
+        loop_state = state
+        return (
+            f"Editing loop {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
+            f"status {short_status(loop_state.status)} · "  # type: ignore[attr-defined]
+            f"mode {mode} · schedule {schedule_scope}"
+        )
+
+    def _iteration_progress_text(self, state: object | None) -> str:
+        if state is None:
+            return "[b][#4ea3ff]ITERATION PROGRESS[/][/]\n\nNo loop selected."
+        loop_state = state
+        target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        progress = render_progress_text(loop_state.completed_iterations, target, width=12)  # type: ignore[attr-defined]
+        return "\n".join(
+            [
+                "[b][#4ea3ff]ITERATION PROGRESS[/][/]",
+                "",
+                (
+                    "Current iteration: "
+                    f"{loop_state.current_iteration or loop_state.completed_iterations} / "
+                    f"{target or '∞'}"
+                ),
+                f"Progress bar: {progress}",
+                "",
+                "Step checklist",
+                *step_status_lines(loop_state.completed_iterations, target, loop_state.status),  # type: ignore[attr-defined]
+            ]
+        )
+
+    def _iteration_history_card_text(self, state: object | None) -> str:
+        if state is None:
+            return "[b][#4ea3ff]ITERATION HISTORY[/][/]\n\nNo loop selected."
+        loop_state = state
+        lines = ["[b][#4ea3ff]ITERATION HISTORY[/][/]", ""]
+        target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        if not loop_state.iterations:  # type: ignore[attr-defined]
+            lines.append("#1 Queued · waiting for first iteration")
+            if target:
+                for number in range(2, min(target, 5) + 1):
+                    lines.append(f"#{number} Queued · pending")
+            return "\n".join(lines)
+        for item in loop_state.iterations[-6:]:  # type: ignore[attr-defined]
+            state_label = "Completed" if item.success else "Failed"
+            lines.append(
+                f"#{item.number} {state_label} · {format_timestamp(item.started_at)} · "
+                f"{format_duration(item.duration_seconds)}"
+            )
+        if loop_state.status == "running":  # type: ignore[attr-defined]
+            lines.append(f"#{loop_state.current_iteration} Running · now")  # type: ignore[attr-defined]
+        queued_start = len(loop_state.iterations) + 1  # type: ignore[attr-defined]
+        if target:
+            for number in range(queued_start, min(target, queued_start + 2) + 1):
+                if loop_state.status == "running" and number == loop_state.current_iteration:  # type: ignore[attr-defined]
+                    continue
+                lines.append(f"#{number} Queued · pending")
+        return "\n".join(lines)
+
+    def _schedule_card_text(self, state: object | None) -> str:
+        mode = self._config_mode_value()
+        interval_kind = self._select_value("#schedule-type", self._config_interval_value())
+        raw_value = self._input_value("#schedule-every", "0")
+        start_time = self._input_value("#schedule-start-time", "Now")
+        timezone = self._select_value("#schedule-timezone", "local").upper()
+        label = schedule_type_label(interval_kind, raw_value)
+        countdown = "manual"
+        if interval_kind == "minutes":
+            countdown = f"in {raw_value} minutes"
+        elif interval_kind == "hours":
+            countdown = f"in {raw_value} hours"
+        elif interval_kind == "daily":
+            countdown = f"next daily window from {start_time}"
+        elif interval_kind == "weekly":
+            countdown = f"next weekly window from {start_time}"
+        elif interval_kind == "cron":
+            countdown = "cron-driven"
+        elif interval_kind == "continuous":
+            countdown = "continuous"
+        return "\n".join(
+            [
+                f"Schedule type: {mode}",
+                f"Every: {label}",
+                f"Start time: {start_time}",
+                f"Timezone: {timezone}",
+                f"Next run countdown: {countdown}",
+            ]
+        )
+
+    def _safety_card_text(self, state: object | None) -> str:
+        autonomy = {
+            "level-1": "Level 1 Observe",
+            "level-2": "Level 2 Suggest",
+            "level-3": "Level 3 Edit",
+            "level-4": "Level 4 Edit + Commit",
+            "level-5": "Level 5 Edit + Commit + Push",
+        }.get(self._select_value("#safety-autonomy", "level-3"), "Level 3 Edit")
+        branch_strategy = {
+            "current": "current branch",
+            "new": "new branch",
+            "per-iteration": "branch per iteration",
+        }.get(self._select_value("#safety-branch-strategy", "current"), "current branch")
+        ask_before_commit = self._checkbox_value("#safety-ask-before-commit", True)
+        ask_before_push = self._checkbox_value("#safety-ask-before-push", True)
+        auto_commit = self._checkbox_value("#safety-auto-commit", False)
+        auto_push = self._checkbox_value("#safety-auto-push", False)
+        backup_branch = self._checkbox_value("#safety-create-backup-branch", True)
+        auto_stop = self._checkbox_value("#safety-auto-stop-on-limit", True)
+        return "\n".join(
+            [
+                f"Autonomy level: {autonomy}",
+                f"Ask before commit: {'on' if ask_before_commit else 'off'}",
+                f"Ask before push: {'on' if ask_before_push else 'off'}",
+                f"Auto commit: {'on' if auto_commit else 'off'}",
+                f"Auto push: {'on' if auto_push else 'off'}",
+                f"Create backup branch: {'on' if backup_branch else 'off'}",
+                f"Branch strategy: {branch_strategy}",
+                f"Max runtime: {self._input_value('#safety-max-runtime', '4h')}",
+                f"Max files changed: {self._input_value('#safety-max-files-changed', '100')}",
+                f"Max commits: {self._input_value('#safety-max-commits', '10')}",
+                f"Max token usage: {self._input_value('#safety-max-token-usage', 'not tracked')}",
+                f"Max cost: {self._input_value('#safety-max-cost', 'not tracked')}",
+                f"Auto-stop on limit: {'on' if auto_stop else 'off'}",
+            ]
+        )
+
+    def _metrics_today_text(self) -> str:
+        states = self.service.list_loops()
+        iterations = [item for state in states for item in state.iterations]
+        total_runs = len(iterations)
+        successful = sum(1 for item in iterations if item.success)
+        success_rate = int((successful / total_runs) * 100) if total_runs else 0
+        avg_runtime = (
+            sum((item.duration_seconds or 0) for item in iterations) / total_runs
+            if total_runs
+            else 0
+        )
+        success_bar = mini_bar(successful, total_runs or 1)
+        return "\n".join(
+            [
+                "[b][#4ea3ff]METRICS TODAY[/][/]",
+                "",
+                f"Runs: {total_runs}",
+                f"Success rate: {success_rate}%  {success_bar}",
+                f"Average runtime: {format_duration(avg_runtime)}",
+                "Files modified: not tracked",
+                "Commits created: not tracked",
+                "Token usage: not tracked",
+                "Cost usage: not tracked",
+            ]
+        )
+
+    def _notifications_text(self) -> str:
+        notify_terminal = self._checkbox_value("#notify-terminal", True)
+        notify_slack = self._checkbox_value("#notify-slack", False)
+        notify_email = self._checkbox_value("#notify-email", False)
+        return "\n".join(
+            [
+                (
+                    "Events: "
+                    f"start={'on' if self._checkbox_value('#notify-start', True) else 'off'} · "
+                    f"success={'on' if self._checkbox_value('#notify-success', True) else 'off'} · "
+                    f"failure={'on' if self._checkbox_value('#notify-failure', True) else 'off'}"
+                ),
+                (
+                    "         "
+                    f"limit={'on' if self._checkbox_value('#notify-limit', True) else 'off'} · "
+                    f"complete={'on' if self._checkbox_value('#notify-complete', True) else 'off'}"
+                ),
+                (
+                    "Channels: "
+                    f"terminal={'on' if notify_terminal else 'off'} · "
+                    f"Slack={'on' if notify_slack else 'off'} · "
+                    f"email={'on' if notify_email else 'off'}"
+                ),
+            ]
+        )
+
+    def _legacy_detail_text(self, state: object | None) -> str:
+        if state is None:
+            return self._unselected_detail_message()
+        loop_state = state
+        target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        progress = render_progress_text(loop_state.completed_iterations, target, width=5)  # type: ignore[attr-defined]
+        lines = [
+            f"RUN {loop_state.loop_id}",  # type: ignore[attr-defined]
+            "",
+            "OVERVIEW",
+            f"status: {short_status(loop_state.status)}",  # type: ignore[attr-defined]
+            f"progress: {progress}",
+            f"runner: {loop_state.run_config.runner}",  # type: ignore[attr-defined]
+            f"agent: {loop_state.run_config.agent or '-'}",  # type: ignore[attr-defined]
+            f"last: {loop_state.last_summary or '-'}",  # type: ignore[attr-defined]
+            "",
+            "CONTROL",
+            f"control: {loop_state.control}",  # type: ignore[attr-defined]
+            f"exit: {loop_state.last_exit_code}",  # type: ignore[attr-defined]
+            f"failures: {loop_state.consecutive_failures}",  # type: ignore[attr-defined]
+            "",
+            "TIMING",
+            f"avg: {loop_state.average_duration_seconds:.2f}s",  # type: ignore[attr-defined]
+            f"total: {loop_state.total_duration_seconds:.2f}s",  # type: ignore[attr-defined]
+            "",
+            "NOTES",
+            f"summary: {loop_state.last_summary or '-'}",  # type: ignore[attr-defined]
+        ]
+        if loop_state.run_config.task_file:  # type: ignore[attr-defined]
+            try:
+                task_state = parse_task_file(
+                    Path(loop_state.run_config.task_file),  # type: ignore[attr-defined]
+                    loop_state.run_config.max_doing,  # type: ignore[attr-defined]
+                )
+                lines.extend(
+                    [
+                        "",
+                        "TASK FILE",
+                        f"task file: {loop_state.run_config.task_file}",  # type: ignore[attr-defined]
+                        (
+                            f"tasks: to do {len(task_state.todo)} · doing "
+                            f"{len(task_state.doing)} · done {len(task_state.done)}"
+                        ),
+                    ]
+                )
+            except Exception as exc:
+                task_error = render_task_file_error(  # type: ignore[attr-defined]
+                    Path(loop_state.run_config.task_file),
+                    exc,
+                ).splitlines()
+                lines.extend(["", *task_error])
+        return "\n".join(lines)
+
+    def _history_log_text(self, state: object | None) -> str:
+        if state is None:
+            return "No loop selected."
+        loop_state = state
+        if not loop_state.iterations:  # type: ignore[attr-defined]
+            return "No iteration history yet."
+        rows = []
+        for item in reversed(loop_state.iterations[-20:]):  # type: ignore[attr-defined]
+            label = "ok" if item.success else "fail"
+            rows.append(
+                f"[{format_timestamp(item.started_at)}] [{label}] iter={item.number} "
+                f"duration={format_duration(item.duration_seconds)} exit={item.exit_code}"
+            )
+            if item.summary:
+                rows.append(f"  summary: {item.summary}")
+        return "\n".join(rows)
+
+    def _metrics_log_text(self, state: object | None) -> str:
+        lines = [self._metrics_today_text().replace("[b][#4ea3ff]", "").replace("[/][/]", "")]
+        if state is not None:
+            loop_state = state
+            lines.extend(
+                [
+                    "",
+                    "Selected loop",
+                    f"  loop_id: {loop_state.loop_id}",  # type: ignore[attr-defined]
+                    f"  status: {loop_state.status}",  # type: ignore[attr-defined]
+                    f"  completed_iterations: {loop_state.completed_iterations}",  # type: ignore[attr-defined]
+                    f"  average_runtime: {format_duration(loop_state.average_duration_seconds)}",  # type: ignore[attr-defined]
+                    f"  total_runtime: {format_duration(loop_state.total_duration_seconds)}",  # type: ignore[attr-defined]
+                ]
+            )
+        return "\n".join(lines)
+
+    def _events_log_text(self, loop_id: str) -> str:
+        paths = self.service.loop_paths(loop_id)
+        if not paths["events"].exists():
+            return "No events yet."
+        rows = []
+        for raw_line in paths["events"].read_text().splitlines()[-80:]:
+            try:
+                payload = json.loads(raw_line)
+            except json.JSONDecodeError:
+                rows.append(raw_line)
+                continue
+            at = format_timestamp(payload.get("at"))
+            event_name = payload.get("event", "event")
+            status = payload.get("control") or payload.get("exit_code") or "ok"
+            status_color = "green" if status in {"ok", 0, "run"} else "yellow"
+            if status in {"stop", "pause"} or str(status).startswith("stop"):
+                status_color = "red"
+            rows.append(
+                f"[cyan]{at}[/] [blue][{event_name}][/blue] "
+                f"[{status_color}]status={status}[/{status_color}]"
+            )
+        return "\n".join(rows)
+
     def _sync_button_state(self) -> None:
+        self._sync_form_controls()
         state = self._selected_state()
         status = state.status if state is not None else None
         can_pause = status in {"running", "pause_requested"}
-        can_resume = status in {"paused", "stopped", "failed", "idle"}
+        can_resume = status in {"paused", "stopped", "failed", "idle"} or (
+            status is None and self._form_supports_run()
+        )
         can_stop = status in {"running", "pause_requested", "paused"}
-        can_remove = status not in {None, "running", "pause_requested", "stop_requested"}
+        can_restart = status in {"paused", "stopped", "failed", "completed"}
+        can_restart_reset = state is not None and status not in {"running", "pause_requested"}
+        can_next_iteration = False
         memory_entry = self._primary_memory_entry()
         for button_id, active in {
             "filter-running": self.filter_mode == "running",
@@ -548,6 +1847,8 @@ class LoopDashboard(App[None]):
             "log-stderr": self.log_kind == "stderr",
             "log-prompt": self.log_kind == "prompt",
             "log-events": self.log_kind == "events",
+            "log-metrics": self.log_kind == "metrics",
+            "log-history": self.log_kind == "history",
             "log-memory": self.log_kind == "memory" and self.memory_filter == "all",
             "log-memory-favorites": self.log_kind == "memory" and self.memory_filter == "favorites",
             "log-memory-history": self.log_kind == "memory" and self.memory_filter == "history",
@@ -555,11 +1856,42 @@ class LoopDashboard(App[None]):
             "log-memory-archived": self.log_kind == "memory" and self.memory_filter == "archived",
             "memory-scope-toggle": self.log_kind == "memory" and self.memory_all_folders,
         }.items():
-            self.query_one(f"#{button_id}", Button).set_class(active, "active")
+            try:
+                self.query_one(f"#{button_id}", Button).set_class(active, "active")
+            except Exception:
+                continue
         self.query_one("#pause", Button).disabled = not can_pause
-        self.query_one("#resume", Button).disabled = not can_resume
+        try:
+            self.query_one("#start-continue", Button).disabled = not can_resume
+            self.query_one("#start-continue", Button).label = (
+                "▶ Start / Continue" if can_resume else "▶ Start / Continue (n/a)"
+            )
+        except Exception:
+            self.query_one("#resume", Button).disabled = not can_resume
         self.query_one("#stop", Button).disabled = not can_stop
-        self.query_one("#remove", Button).disabled = not can_remove
+        try:
+            self.query_one("#restart", Button).disabled = not can_restart
+            self.query_one("#restart-reset", Button).disabled = not can_restart_reset
+            self.query_one("#next-iteration", Button).disabled = not can_next_iteration
+            self.query_one("#save-config", Button).disabled = status in {
+                "running",
+                "pause_requested",
+                "stop_requested",
+            }
+            self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
+            self.query_one("#next-iteration", Button).label = (
+                "≫ Next Iteration" if can_next_iteration else "≫ Next Iteration (n/a)"
+            )
+            self.query_one("#save-config", Button).label = (
+                "Save Config"
+                if status not in {"running", "pause_requested", "stop_requested"}
+                else "Save Config (locked)"
+            )
+            self.query_one("#run-loop", Button).label = (
+                "Run Loop" if self._form_supports_run() else "Run Loop (limited)"
+            )
+        except Exception:
+            pass
         self.query_one("#memory-replay", Button).disabled = not (
             self.log_kind == "memory" and memory_entry is not None
         )
@@ -581,9 +1913,12 @@ class LoopDashboard(App[None]):
         self.query_one("#memory-delete", Button).label = (
             "x confirm delete" if self.memory_delete_armed else "x delete"
         )
-        self.query_one("#remove", Button).label = (
-            "✖ Confirm delete" if self.delete_armed else "✖ Delete"
-        )
+        try:
+            self.query_one("#remove", Button).label = (
+                "✖ Confirm delete" if self.delete_armed else "✖ Delete"
+            )
+        except Exception:
+            pass
         memory_visible = self.log_kind == "memory"
         self.query_one("#memory-action-toolbar", Horizontal).set_class(
             not memory_visible, "memory-ui-hidden"
@@ -598,14 +1933,14 @@ class LoopDashboard(App[None]):
             bar.update(self._memory_help_text())
             return
         if state is None:
-            bar.update(base + " · no loop selected")
+            bar.update(base + " · no loop selected · run from config or choose a loop")
             return
         loop_state = state.status  # type: ignore[attr-defined]
         actions: list[str] = []
         if loop_state in {"running", "pause_requested"}:
             actions.append("p pause")
         if loop_state in {"paused", "stopped", "failed", "idle"}:
-            actions.append("u resume")
+            actions.append("u continue")
         if loop_state in {"running", "pause_requested", "paused"}:
             actions.append("s stop")
         if (
@@ -615,16 +1950,28 @@ class LoopDashboard(App[None]):
             actions.append("d delete")
         if self.delete_armed:
             actions.append("d confirm delete")
+        if loop_state in {"paused", "stopped", "failed", "completed"}:
+            actions.append("restart")
         action_text = " · ".join(actions) if actions else "read only"
         bar.update(f"{base} · actions {action_text}")
 
     def _filtered_loops(self):
         states = self.service.list_loops()
         if self.filter_mode == "running":
-            return [state for state in states if state.status in RUNNING_STATUSES]
-        if self.filter_mode == "active":
-            return [state for state in states if state.status in ACTIVE_STATUSES]
-        return states
+            states = [state for state in states if state.status in RUNNING_STATUSES]
+        elif self.filter_mode == "active":
+            states = [state for state in states if state.status in ACTIVE_STATUSES]
+        if not self.loop_query:
+            return states
+        query = self.loop_query.lower()
+        return [
+            state
+            for state in states
+            if query in state.loop_id.lower()
+            or query in state.status.lower()
+            or query in (state.run_config.agent or "").lower()
+            or query in state.run_config.runner.lower()
+        ]
 
     def _empty_loop_message(self) -> str:
         total, active, running = self._summary_counts()
@@ -903,6 +2250,7 @@ class LoopDashboard(App[None]):
         states = self._filtered_loops()
         table = self.query_one(DataTable)
         table.clear(columns=False)
+        self._render_sidebar_stats(states)
         if self.initial_loop_id and self.selected_loop_id is None:
             self.selected_loop_id = self.initial_loop_id
         if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
@@ -952,74 +2300,45 @@ class LoopDashboard(App[None]):
             return None
 
     def _render_selected(self) -> None:
-        detail = self.query_one("#detail_view", Static)
+        try:
+            loop_summary = self.query_one("#loop_summary", Static)
+            config_status = self.query_one("#config-status", Static)
+            workspace_scope = self.query_one("#workspace_scope", Static)
+            iteration_progress = self.query_one("#iteration_progress", Static)
+            iteration_history = self.query_one("#iteration_history", Static)
+            schedule_preview = self.query_one("#schedule-preview", Static)
+            safety_preview = self.query_one("#safety-preview", Static)
+            metrics_today = self.query_one("#metrics_today", Static)
+            notifications_preview = self.query_one("#notifications-preview", Static)
+            modern_layout = True
+        except Exception:
+            modern_layout = False
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
+        if modern_layout:
+            self._sync_config_form_from_state(state)
         self._render_summary_bar()
+        if modern_layout:
+            loop_summary.update(self._loop_summary_text(state))
+            config_status.update(self._config_status_text(state))
+            workspace_scope.update(self._workspace_scope_text(state))
+            iteration_progress.update(self._iteration_progress_text(state))
+            iteration_history.update(self._iteration_history_card_text(state))
+            schedule_preview.update(self._schedule_card_text(state))
+            safety_preview.update(self._safety_card_text(state))
+            metrics_today.update(self._metrics_today_text())
+            notifications_preview.update(self._notifications_text())
+        else:
+            self.query_one("#detail_view", Static).update(self._legacy_detail_text(state))
         if self.log_kind == "memory":
-            detail.update(self._memory_detail_text())
             log_meta.update(self._memory_log_meta())
             log_view.update(self._memory_log_text())
             return
         if state is None:
-            detail.update(self._unselected_detail_message())
             log_meta.update(f"source {self.log_kind} · no loop selected")
             log_view.update(self._empty_loop_message())
             return
-
-        target = state.run_config.steps
-        progress = (
-            render_progress_text(state.completed_iterations, target, width=5)
-        )
-        lines = [
-            f"RUN {state.loop_id}",
-            "",
-            "OVERVIEW",
-            f"status: {short_status(state.status)}",
-            f"progress: {progress}",
-            f"runner: {state.run_config.runner}",
-            f"agent: {state.run_config.agent or '-'}",
-            f"last: {state.last_summary or '-'}",
-            "",
-            "CONTROL",
-            f"control: {state.control}",
-            f"exit: {state.last_exit_code}",
-            f"failures: {state.consecutive_failures}",
-            "",
-            "TIMING",
-            f"avg: {state.average_duration_seconds:.2f}s",
-            f"total: {state.total_duration_seconds:.2f}s",
-            "",
-            "NOTES",
-            f"summary: {state.last_summary or '-'}",
-        ]
-        if state.run_config.task_file:
-            try:
-                task_state = parse_task_file(
-                    Path(state.run_config.task_file),
-                    state.run_config.max_doing,
-                )
-                lines.extend(
-                    [
-                        "",
-                        "TASK FILE",
-                        f"task file: {state.run_config.task_file}",
-                        (
-                            f"tasks: to do {len(task_state.todo)} · doing "
-                            f"{len(task_state.doing)} · done {len(task_state.done)}"
-                        ),
-                    ]
-                )
-            except Exception as exc:
-                task_error_lines = render_task_file_error(
-                    Path(state.run_config.task_file),
-                    exc,
-                ).splitlines()
-                lines.extend(
-                    ["", *task_error_lines]
-                )
-        detail.update("\n".join(lines))
 
         paths = self.service.loop_paths(state.loop_id) if state.iterations else None
         log_meta.update(
@@ -1027,14 +2346,20 @@ class LoopDashboard(App[None]):
         )
         if self.log_kind == "events":
             if paths:
-                log_view.update(read_events(paths["events"]))
+                log_view.update(self._events_log_text(state.loop_id))
             else:
                 log_view.update("No events yet.")
+            return
+        if self.log_kind == "history":
+            log_view.update(colorize_log_text(self._history_log_text(state)))
+            return
+        if self.log_kind == "metrics":
+            log_view.update(colorize_log_text(self._metrics_log_text(state)))
             return
         if not paths:
             log_view.update("No logs yet.")
             return
-        log_view.update(tail_text(paths[self.log_kind]))
+        log_view.update(colorize_log_text(tail_text(paths[self.log_kind])))
 
     @on(DataTable.RowSelected)
     def on_loop_selected(self, event: DataTable.RowSelected) -> None:
@@ -1048,18 +2373,30 @@ class LoopDashboard(App[None]):
             self.refresh_data()
         elif button_id == "pause":
             self.action_pause_selected()
-        elif button_id == "resume":
+        elif button_id == "start-continue":
             self.action_resume_selected()
         elif button_id == "stop":
             self.action_stop_selected()
-        elif button_id == "remove":
-            self.action_remove_selected()
+        elif button_id == "restart":
+            self.action_restart_selected()
+        elif button_id == "restart-reset":
+            self.action_restart_reset_selected()
+        elif button_id == "next-iteration":
+            self.notify("next iteration is not available for this runner yet")
+        elif button_id == "save-config":
+            self.action_save_config()
+        elif button_id == "run-loop":
+            self.action_run_loop()
         elif button_id == "filter-running":
             self.action_filter_running()
         elif button_id == "filter-active":
             self.action_filter_active()
         elif button_id == "filter-all":
             self.action_filter_all()
+        elif button_id == "log-metrics":
+            self.action_set_log_metrics()
+        elif button_id == "log-history":
+            self.action_set_log_history()
         elif button_id == "log-memory":
             self.action_set_log_memory()
         elif button_id == "log-memory-favorites":
@@ -1096,6 +2433,54 @@ class LoopDashboard(App[None]):
     @on(Input.Changed, "#memory-query")
     def on_memory_query_changed(self, event: Input.Changed) -> None:
         self._apply_memory_query(event.value)
+
+    @on(Input.Changed, "#loop-query")
+    def on_loop_query_changed(self, event: Input.Changed) -> None:
+        self.loop_query = event.value.strip()
+        self.delete_armed = False
+        self.refresh_data()
+
+    @on(Input.Changed, "#workspace-root")
+    def on_workspace_root_changed(self, _event: Input.Changed) -> None:
+        self._render_selected()
+
+    @on(TextArea.Changed, "#workspace-include, #workspace-exclude, #config-prompt")
+    def on_textarea_changed(self, _event: TextArea.Changed) -> None:
+        self._sync_button_state()
+        self._render_selected()
+
+    @on(
+        Input.Changed,
+        "#config-iterations, #config-interval-value, #config-quiet-start, #config-quiet-end, "
+        "#config-jitter-value, #schedule-every, #schedule-start-time, #safety-max-runtime, "
+        "#safety-max-files-changed, #safety-max-commits, #safety-max-token-usage, #safety-max-cost",
+    )
+    def on_dashboard_input_changed(self, _event: Input.Changed) -> None:
+        self._sync_schedule_with_config()
+        self._sync_button_state()
+        self._render_selected()
+
+    @on(
+        Select.Changed,
+        "#config-mode, #config-interval, #schedule-type, #schedule-timezone, #safety-autonomy, "
+        "#safety-branch-strategy",
+    )
+    def on_dashboard_select_changed(self, _event: Select.Changed) -> None:
+        self._sync_schedule_with_config()
+        self._sync_button_state()
+        self._render_selected()
+
+    @on(
+        Checkbox.Changed,
+        "#config-quiet-hours, #config-jitter, #safety-ask-before-commit, "
+        "#safety-ask-before-push, #safety-auto-commit, #safety-auto-push, "
+        "#safety-create-backup-branch, #safety-auto-stop-on-limit, #notify-start, "
+        "#notify-success, #notify-failure, #notify-limit, "
+        "#notify-complete, #notify-terminal, #notify-slack, #notify-email",
+    )
+    def on_dashboard_checkbox_changed(self, _event: Checkbox.Changed) -> None:
+        self._sync_button_state()
+        self._render_selected()
 
     def _apply_memory_query(self, value: str) -> None:
         self.memory_query = value.strip()
@@ -1183,6 +2568,18 @@ class LoopDashboard(App[None]):
 
     def action_set_log_events(self) -> None:
         self.log_kind = "events"
+        self._sync_button_state()
+        self._render_summary_bar()
+        self._render_selected()
+
+    def action_set_log_metrics(self) -> None:
+        self.log_kind = "metrics"
+        self._sync_button_state()
+        self._render_summary_bar()
+        self._render_selected()
+
+    def action_set_log_history(self) -> None:
+        self.log_kind = "history"
         self._sync_button_state()
         self._render_summary_bar()
         self._render_selected()
@@ -1377,12 +2774,98 @@ class LoopDashboard(App[None]):
             self._spawn_resume(self.selected_loop_id)
             self.notify(f"resume sent: {self.selected_loop_id}")
             self.refresh_data()
+            return
+        if not self._form_supports_run():
+            self.notify(
+                "scheduled mode is visible in the dashboard but not executable yet",
+                severity="warning",
+            )
+            return
+        self.action_run_loop()
 
     def action_stop_selected(self) -> None:
         if self.selected_loop_id:
             self.delete_armed = False
             self.service.request_control(self.selected_loop_id, "stop")
             self.refresh_data()
+
+    def action_save_config(self) -> None:
+        state = self._selected_state()
+        if state is None:
+            self.notify("config draft captured in the form")
+            self._sync_button_state()
+            self._render_selected()
+            return
+        if state.status in {"running", "pause_requested", "stop_requested"}:
+            self.notify("stop or pause the loop before saving config changes", severity="warning")
+            return
+        state.run_config = self._build_run_config_from_form(state)
+        state.updated_at = datetime.now(UTC).isoformat()
+        self.service.store.save(state)
+        self.notify(f"config saved: {state.loop_id}")
+        self.refresh_data()
+
+    def action_run_loop(self) -> None:
+        if not self._form_supports_run():
+            self.notify(
+                "scheduled mode is visible in the dashboard but not executable yet",
+                severity="warning",
+            )
+            return
+        state = self._selected_state()
+        if state is not None and state.status not in {
+            "running",
+            "pause_requested",
+            "stop_requested",
+        }:
+            state.run_config = self._build_run_config_from_form(state)
+            state.updated_at = datetime.now(UTC).isoformat()
+            self.service.store.save(state)
+            self._spawn_resume(state.loop_id)
+            self.notify(f"run sent: {state.loop_id}")
+            self.refresh_data()
+            return
+        run_config = self._build_run_config_from_form()
+        created = self.service.create_loop(run_config)
+        self.selected_loop_id = created.loop_id
+        self._config_bound_loop_id = None
+        self._spawn_resume(created.loop_id)
+        self.notify(f"loop started: {created.loop_id}")
+        self.refresh_data()
+
+    def action_restart_selected(self) -> None:
+        state = self._selected_state()
+        if state is None:
+            return
+        state.run_config = self._build_run_config_from_form(state)
+        state.control = "run"
+        state.status = "idle"
+        state.updated_at = datetime.now(UTC).isoformat()
+        self.service.store.save(state)
+        self._spawn_resume(state.loop_id)
+        self.notify(f"restart sent: {state.loop_id}")
+        self.refresh_data()
+
+    def action_restart_reset_selected(self) -> None:
+        state = self._selected_state()
+        if state is None:
+            return
+        state.run_config = self._build_run_config_from_form(state)
+        state.control = "run"
+        state.status = "idle"
+        state.current_iteration = 0
+        state.completed_iterations = 0
+        state.last_exit_code = None
+        state.consecutive_failures = 0
+        state.total_duration_seconds = 0.0
+        state.average_duration_seconds = 0.0
+        state.last_summary = None
+        state.iterations = []
+        state.updated_at = datetime.now(UTC).isoformat()
+        self.service.store.save(state)
+        self._spawn_resume(state.loop_id)
+        self.notify(f"restart reset sent: {state.loop_id}")
+        self.refresh_data()
 
     def action_remove_selected(self) -> None:
         if self.selected_loop_id:
