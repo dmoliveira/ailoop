@@ -341,12 +341,14 @@ class LoopDashboard(App[None]):
     }
 
     #top_row > .card,
+    #top_row > .card-static,
     #middle_row > .card {
         width: 1fr;
         margin-right: 1;
     }
 
     #top_row > .card:last-child,
+    #top_row > .card-static:last-child,
     #middle_row > .card:last-child {
         margin-right: 0;
     }
