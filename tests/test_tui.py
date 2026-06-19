@@ -2192,11 +2192,10 @@ def test_actions_status_text_summarizes_available_controls(tmp_path: Path) -> No
 
     text = app._actions_status_text(state)
 
-    assert "Selected controls-loo" in text
-    assert "status running" in text
+    assert text.startswith("controls-loo · running")
     assert "pause ready" in text
     assert "stop ready" in text
-    assert "next iteration blocked" in text
+    assert "next blocked" in text
 
 
 def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path: Path) -> None:
