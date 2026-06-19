@@ -460,6 +460,7 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     text = app._summary_bar_text(0, 0, 0, 0, 0, None)
     assert f"memory all · labels 0 · selected {entry.id}" in text
     assert "log memory" not in text
+    assert "current branch" not in text
 
 
 def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
@@ -501,6 +502,28 @@ def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     assert text == "all 0 · act 0 · run 0 · pause 0 · fail 0 · f running · stdout · sel none"
 
 
+def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "reliability-review"
+        status = "running"
+        current_iteration = 2
+        completed_iterations = 1
+
+        class run_config:
+            steps = 5
+
+    app._schedule_card_text = lambda _state: "x\ny\nz\nNext run countdown: in 30 minutes"  # type: ignore[method-assign]
+
+    text = app._summary_selected_text(FakeState(), width=140)
+
+    assert "selected reliability-" in text
+    assert "iter 2/5" in text
+    assert "next 30m" in text
+    assert "current branch" not in text
+
+
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -529,7 +552,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=120)
-    assert "logs 1/2/3/4/5/6/7/m/0" in text
+    assert "logs 1-7/m/0" in text
     assert "all" in text
     assert "1" in text
     assert "0/0" in text
@@ -2223,3 +2246,6 @@ def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path:
 
     assert "#2 Running" in text
     assert "#2 Failed" not in text
+    assert "#2 Running · " in text
+    assert ":40 · 8m 00s" in text
+    assert "2026-05-16" not in text

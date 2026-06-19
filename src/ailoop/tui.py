@@ -92,6 +92,15 @@ def format_timestamp(value: str | None) -> str:
         return value
 
 
+def format_compact_timestamp(value: str | None) -> str:
+    if not value:
+        return "-"
+    try:
+        return datetime.fromisoformat(value).astimezone().strftime("%H:%M")
+    except ValueError:
+        return value
+
+
 def format_duration(seconds: float | None) -> str:
     if seconds is None:
         return "-"
@@ -175,6 +184,16 @@ def schedule_type_label(value: str, raw_value: str) -> str:
         "weekly": f"weekly at {raw_value}",
         "cron": f"cron {raw_value}",
     }.get(value, value)
+
+
+def compact_countdown_text(value: str) -> str:
+    if value.startswith("in ") and value.endswith(" minutes"):
+        return f"next {value.removeprefix('in ').removesuffix(' minutes')}m"
+    if value.startswith("in ") and value.endswith(" hours"):
+        return f"next {value.removeprefix('in ').removesuffix(' hours')}h"
+    if value == "continuous":
+        return "next cont"
+    return f"next {value}"
 
 
 def mini_bar(completed: int, total: int, width: int = 12) -> str:
@@ -1330,10 +1349,6 @@ class LoopDashboard(App[None]):
         actual_width = width or 0
         compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         selected_text = self._summary_selected_text(state, width=actual_width)
-        branch_strategy = branch_strategy_label(
-            self._select_value("#safety-branch-strategy", "current")
-        )
-        autonomy = autonomy_label(self._select_value("#safety-autonomy", "level-3"))
         if compact:
             base = f"all {total} · act {active} · run {running} · pause {paused} · fail {failed}"
         else:
@@ -1344,16 +1359,10 @@ class LoopDashboard(App[None]):
         if self.log_kind == "memory":
             if compact:
                 return f"{base} · f {self.filter_mode} · {selected_text}"
-            return (
-                f"{base} · filter {self.filter_mode} · {branch_strategy} · "
-                f"{autonomy} · {selected_text}"
-            )
+            return f"{base} · filter {self.filter_mode} · {selected_text}"
         if compact:
             return f"{base} · f {self.filter_mode} · {self.log_kind} · {selected_text}"
-        return (
-            f"{base} · filter {self.filter_mode} · log {self.log_kind} · "
-            f"{branch_strategy} · {autonomy} · {selected_text}"
-        )
+        return f"{base} · filter {self.filter_mode} · {self.log_kind} · {selected_text}"
 
     def _summary_selected_text(self, state: object | None, width: int | None = None) -> str:
         actual_width = width or 0
@@ -1377,10 +1386,10 @@ class LoopDashboard(App[None]):
                 return "sel none"
             return "selected none"
         loop_state = state
-        branch_strategy = branch_strategy_label(
-            self._select_value("#safety-branch-strategy", "current")
-        )
         schedule_hint = self._schedule_card_text(loop_state).splitlines()[-1]
+        schedule_hint = compact_countdown_text(
+            schedule_hint.removeprefix("Next run countdown: ")
+        )
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
         iteration_text = (
             "iter "
@@ -1396,14 +1405,14 @@ class LoopDashboard(App[None]):
         return (
             f"selected {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
             f"{short_status(loop_state.status)} · {iteration_text} · "  # type: ignore[attr-defined]
-            f"{schedule_hint} · {branch_strategy}"
+            f"{schedule_hint}"
         )
 
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
         if actual_width and actual_width <= COMPACT_LAYOUT_WIDTH:
             return "↑↓ filt g/a/l · 1-7/m/0 · r/q"
-        return "nav ↑↓/click · filters g/a/l · logs 1/2/3/4/5/6/7/m/0 · r refresh · q quit"
+        return "nav ↑↓/click · filters g/a/l · logs 1-7/m/0 · r refresh · q quit"
 
     def _memory_compact_actions(self) -> str:
         parts = ["[ ]", "b/n/c"]
@@ -1609,7 +1618,7 @@ class LoopDashboard(App[None]):
             if item.number == loop_state.current_iteration and item.success is None:  # type: ignore[attr-defined]
                 has_unfinished_current = True
             lines.append(
-                f"#{item.number} {state_label} · {format_timestamp(item.started_at)} · "
+                f"#{item.number} {state_label} · {format_compact_timestamp(item.started_at)} · "
                 f"{format_duration(item.duration_seconds)}"
             )
         if loop_state.status == "running" and not has_unfinished_current:  # type: ignore[attr-defined]
