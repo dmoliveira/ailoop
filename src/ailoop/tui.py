@@ -77,6 +77,12 @@ def render_progress_text(completed: int, target: int | None, width: int = 4) -> 
     return f"{bar} {completed}/{target}"
 
 
+def effective_iteration_count(completed: int, current: int, status: str) -> int:
+    if status in ACTIVE_STATUSES and current > completed:
+        return current
+    return completed
+
+
 def format_timestamp(value: str | None) -> str:
     if not value:
         return "-"
@@ -750,6 +756,7 @@ class LoopDashboard(App[None]):
                             yield Button("≫ Next Iteration", id="next-iteration")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("⟳ Refresh", id="refresh")
+                        yield Static(id="actions-status", classes="mini-note")
                 with Horizontal(id="middle_row", classes="card-row"):
                     with Vertical(id="config_card", classes="card"):
                         yield Static("AI LOOP CONFIG", classes="panel-title")
@@ -1463,7 +1470,12 @@ class LoopDashboard(App[None]):
             )
         loop_state = state
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
-        progress = render_progress_text(loop_state.completed_iterations, target, width=8)  # type: ignore[attr-defined]
+        progress_count = effective_iteration_count(
+            loop_state.completed_iterations,  # type: ignore[attr-defined]
+            loop_state.current_iteration,  # type: ignore[attr-defined]
+            loop_state.status,  # type: ignore[attr-defined]
+        )
+        progress = render_progress_text(progress_count, target, width=8)
         interval_kind, interval_value = interval_text(loop_state.run_config.pause_seconds)  # type: ignore[attr-defined]
         interval_label = {
             "continuous": "continuous",
@@ -1552,7 +1564,12 @@ class LoopDashboard(App[None]):
             return "[b][#4ea3ff]ITERATION PROGRESS[/][/]\n\nNo loop selected."
         loop_state = state
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
-        progress = render_progress_text(loop_state.completed_iterations, target, width=12)  # type: ignore[attr-defined]
+        progress_count = effective_iteration_count(
+            loop_state.completed_iterations,  # type: ignore[attr-defined]
+            loop_state.current_iteration,  # type: ignore[attr-defined]
+            loop_state.status,  # type: ignore[attr-defined]
+        )
+        progress = render_progress_text(progress_count, target, width=12)
         return "\n".join(
             [
                 "[b][#4ea3ff]ITERATION PROGRESS[/][/]",
@@ -1581,13 +1598,21 @@ class LoopDashboard(App[None]):
                 for number in range(2, min(target, 5) + 1):
                     lines.append(f"#{number} Queued · pending")
             return "\n".join(lines)
+        has_unfinished_current = False
         for item in loop_state.iterations[-6:]:  # type: ignore[attr-defined]
-            state_label = "Completed" if item.success else "Failed"
+            if item.success is True:
+                state_label = "Completed"
+            elif item.success is False:
+                state_label = "Failed"
+            else:
+                state_label = "Running"
+            if item.number == loop_state.current_iteration and item.success is None:  # type: ignore[attr-defined]
+                has_unfinished_current = True
             lines.append(
                 f"#{item.number} {state_label} · {format_timestamp(item.started_at)} · "
                 f"{format_duration(item.duration_seconds)}"
             )
-        if loop_state.status == "running":  # type: ignore[attr-defined]
+        if loop_state.status == "running" and not has_unfinished_current:  # type: ignore[attr-defined]
             lines.append(f"#{loop_state.current_iteration} Running · now")  # type: ignore[attr-defined]
         queued_start = len(loop_state.iterations) + 1  # type: ignore[attr-defined]
         if target:
@@ -1597,13 +1622,41 @@ class LoopDashboard(App[None]):
                 lines.append(f"#{number} Queued · pending")
         return "\n".join(lines)
 
+    def _actions_status_text(self, state: object | None) -> str:
+        if state is None:
+            return "Ready to launch a new loop from the draft config."
+        loop_state = state
+        status = loop_state.status  # type: ignore[attr-defined]
+        actions: list[str] = []
+        if status in {"paused", "stopped", "failed", "idle"}:
+            actions.append("continue ready")
+        if status in {"running", "pause_requested"}:
+            actions.append("pause ready")
+        if status in {"running", "pause_requested", "paused"}:
+            actions.append("stop ready")
+        if status in {"paused", "stopped", "failed", "completed"}:
+            actions.append("restart ready")
+        actions.append("next iteration blocked")
+        action_text = " · ".join(actions)
+        return (
+            f"Selected {short_loop_id(loop_state.loop_id)} · status {short_status(status)} · "
+            f"{action_text}"
+        )
+
     def _schedule_card_text(self, state: object | None) -> str:
-        mode = self._config_mode_value()
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
         raw_value = self._input_value("#schedule-every", "0")
         start_time = self._input_value("#schedule-start-time", "Now")
         timezone = self._select_value("#schedule-timezone", "local").upper()
         label = schedule_type_label(interval_kind, raw_value)
+        type_label = {
+            "continuous": "continuous",
+            "minutes": "every X minutes",
+            "hours": "every X hours",
+            "daily": "daily",
+            "weekly": "weekly",
+            "cron": "cron",
+        }.get(interval_kind, interval_kind)
         countdown = "manual"
         if interval_kind == "minutes":
             countdown = f"in {raw_value} minutes"
@@ -1619,7 +1672,7 @@ class LoopDashboard(App[None]):
             countdown = "continuous"
         return "\n".join(
             [
-                f"Schedule type: {mode}",
+                f"Schedule type: {type_label}",
                 f"Every: {label}",
                 f"Start time: {start_time}",
                 f"Timezone: {timezone}",
@@ -2302,6 +2355,7 @@ class LoopDashboard(App[None]):
     def _render_selected(self) -> None:
         try:
             loop_summary = self.query_one("#loop_summary", Static)
+            actions_status = self.query_one("#actions-status", Static)
             config_status = self.query_one("#config-status", Static)
             workspace_scope = self.query_one("#workspace_scope", Static)
             iteration_progress = self.query_one("#iteration_progress", Static)
@@ -2321,6 +2375,7 @@ class LoopDashboard(App[None]):
         self._render_summary_bar()
         if modern_layout:
             loop_summary.update(self._loop_summary_text(state))
+            actions_status.update(self._actions_status_text(state))
             config_status.update(self._config_status_text(state))
             workspace_scope.update(self._workspace_scope_text(state))
             iteration_progress.update(self._iteration_progress_text(state))
