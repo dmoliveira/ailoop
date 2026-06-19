@@ -901,6 +901,7 @@ class LoopDashboard(App[None]):
                 yield Static(id="iteration_history", classes="card-static")
                 with Vertical(id="schedule_card", classes="right-card"):
                     yield Static("SCHEDULING", classes="panel-title")
+                    yield Static(id="schedule-preview", classes="mini-note")
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Static("Schedule type", classes="section-title")
@@ -940,9 +941,9 @@ class LoopDashboard(App[None]):
                                 value=str(defaults["schedule_timezone"]),
                                 id="schedule-timezone",
                             )
-                    yield Static(id="schedule-preview", classes="mini-note")
                 with Vertical(id="safety_card", classes="right-card"):
                     yield Static("BEHAVIOUR & SAFETY", classes="panel-title")
+                    yield Static(id="safety-preview", classes="mini-note")
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Static("Autonomy level", classes="section-title")
@@ -1025,10 +1026,10 @@ class LoopDashboard(App[None]):
                         with Vertical(classes="field-group"):
                             yield Static("Max cost", classes="section-title")
                             yield Input(str(defaults["max_cost"]), id="safety-max-cost")
-                    yield Static(id="safety-preview", classes="mini-note")
                 yield Static(id="metrics_today", classes="card-static")
                 with Vertical(id="notifications_card", classes="right-card"):
                     yield Static("NOTIFICATIONS", classes="panel-title")
+                    yield Static(id="notifications-preview", classes="mini-note")
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Checkbox(
@@ -1075,7 +1076,6 @@ class LoopDashboard(App[None]):
                                 value=bool(defaults["notify_email"]),
                                 id="notify-email",
                             )
-                    yield Static(id="notifications-preview", classes="mini-note")
         yield Static("loading...", id="help_bar")
 
     def on_mount(self) -> None:
