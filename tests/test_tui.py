@@ -2084,3 +2084,142 @@ def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
     assert "strategy: branch per iteration" in text
     assert "schedule: every 45 minutes" in text
     assert "quiet-hours: on" in text
+
+
+def test_iteration_progress_text_uses_current_iteration_while_running(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="progress-loop")
+    state.status = "running"
+    state.current_iteration = 2
+    state.completed_iterations = 1
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    text = app._iteration_progress_text(state)
+
+    assert "Current iteration: 2 / 5" in text
+    assert "Progress bar: █████░░░░░░░ 2/5" in text
+    assert "1/5" not in text
+
+
+def test_schedule_card_text_uses_selected_schedule_type_not_loop_mode() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#schedule-type": FakeSelect("hours"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("6"),
+        "#schedule-start-time": FakeInput("09:30"),
+        "#schedule-timezone": FakeSelect("local"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._schedule_card_text(None)
+
+    assert "Schedule type: every X hours" in text
+    assert "Every: every 6 hours" in text
+    assert "Schedule type: fixed" not in text
+
+
+def test_actions_status_text_summarizes_available_controls(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="controls-loop")
+    state.status = "running"
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    text = app._actions_status_text(state)
+
+    assert "Selected controls-loo" in text
+    assert "status running" in text
+    assert "pause ready" in text
+    assert "stop ready" in text
+    assert "next iteration blocked" in text
+
+
+def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="history-loop")
+    state.status = "running"
+    state.current_iteration = 2
+    state.completed_iterations = 1
+
+    from ailoop.models import IterationRecord
+
+    state.iterations = [
+        IterationRecord(
+            number=1,
+            started_at="2026-05-16T10:40:01+00:00",
+            finished_at="2026-05-16T10:48:13+00:00",
+            duration_seconds=492,
+            exit_code=0,
+            success=True,
+        ),
+        IterationRecord(
+            number=2,
+            started_at="2026-05-16T11:40:01+00:00",
+            duration_seconds=480,
+            success=None,
+        ),
+    ]
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    text = app._iteration_history_card_text(state)
+
+    assert "#2 Running" in text
+    assert "#2 Failed" not in text
