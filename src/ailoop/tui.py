@@ -548,6 +548,10 @@ class LoopDashboard(App[None]):
         margin-top: 1;
     }
 
+    .detail-preview-hidden {
+        display: none;
+    }
+
     .compact-field {
         width: 12;
         margin-right: 1;
@@ -903,7 +907,7 @@ class LoopDashboard(App[None]):
                 yield Static(id="ops_snapshot", classes="card-static")
                 with Vertical(id="schedule_card", classes="right-card"):
                     yield Static("SCHEDULING", classes="panel-title")
-                    yield Static(id="schedule-preview", classes="mini-note")
+                    yield Static(id="schedule-preview", classes="mini-note detail-preview-hidden")
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Static("Schedule type", classes="section-title")
@@ -945,7 +949,7 @@ class LoopDashboard(App[None]):
                             )
                 with Vertical(id="safety_card", classes="right-card"):
                     yield Static("BEHAVIOUR & SAFETY", classes="panel-title")
-                    yield Static(id="safety-preview", classes="mini-note")
+                    yield Static(id="safety-preview", classes="mini-note detail-preview-hidden")
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Static("Autonomy level", classes="section-title")
@@ -1031,7 +1035,10 @@ class LoopDashboard(App[None]):
                 yield Static(id="metrics_today", classes="card-static")
                 with Vertical(id="notifications_card", classes="right-card"):
                     yield Static("NOTIFICATIONS", classes="panel-title")
-                    yield Static(id="notifications-preview", classes="mini-note")
+                    yield Static(
+                        id="notifications-preview",
+                        classes="mini-note detail-preview-hidden",
+                    )
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Checkbox(
