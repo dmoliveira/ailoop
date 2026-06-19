@@ -768,12 +768,12 @@ class LoopDashboard(App[None]):
                     with Vertical(id="actions_card", classes="card"):
                         yield Static("ACTIONS", classes="panel-title")
                         with Horizontal(classes="toolbar action-toolbar"):
-                            yield Button("▶ Start / Continue", id="start-continue")
+                            yield Button("▶ Start", id="start-continue")
                             yield Button("⏸ Pause", id="pause")
                             yield Button("⏹ Stop", id="stop")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("↻ Restart", id="restart")
-                            yield Button("↺ Restart + Reset", id="restart-reset")
+                            yield Button("↺ Reset Counter", id="restart-reset")
                             yield Button("≫ Next Iteration", id="next-iteration")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("⟳ Refresh", id="refresh")
@@ -1635,7 +1635,7 @@ class LoopDashboard(App[None]):
 
     def _actions_status_text(self, state: object | None) -> str:
         if state is None:
-            return "Ready to launch a new loop from the draft config."
+            return "Draft loop ready to start from the current config."
         loop_state = state
         status = loop_state.status  # type: ignore[attr-defined]
         actions: list[str] = []
@@ -1647,12 +1647,9 @@ class LoopDashboard(App[None]):
             actions.append("stop ready")
         if status in {"paused", "stopped", "failed", "completed"}:
             actions.append("restart ready")
-        actions.append("next iteration blocked")
+        actions.append("next blocked")
         action_text = " · ".join(actions)
-        return (
-            f"Selected {short_loop_id(loop_state.loop_id)} · status {short_status(status)} · "
-            f"{action_text}"
-        )
+        return f"{short_loop_id(loop_state.loop_id)} · {short_status(status)} · {action_text}"
 
     def _schedule_card_text(self, state: object | None) -> str:
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
@@ -1927,9 +1924,13 @@ class LoopDashboard(App[None]):
         self.query_one("#pause", Button).disabled = not can_pause
         try:
             self.query_one("#start-continue", Button).disabled = not can_resume
-            self.query_one("#start-continue", Button).label = (
-                "▶ Start / Continue" if can_resume else "▶ Start / Continue (n/a)"
-            )
+            if state is None:
+                start_label = "▶ Start"
+            elif status in {"paused", "stopped", "failed"}:
+                start_label = "▶ Continue"
+            else:
+                start_label = "▶ Start"
+            self.query_one("#start-continue", Button).label = start_label
         except Exception:
             self.query_one("#resume", Button).disabled = not can_resume
         self.query_one("#stop", Button).disabled = not can_stop
@@ -1941,19 +1942,12 @@ class LoopDashboard(App[None]):
                 "running",
                 "pause_requested",
                 "stop_requested",
-            }
+            } 
             self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
-            self.query_one("#next-iteration", Button).label = (
-                "≫ Next Iteration" if can_next_iteration else "≫ Next Iteration (n/a)"
-            )
-            self.query_one("#save-config", Button).label = (
-                "Save Config"
-                if status not in {"running", "pause_requested", "stop_requested"}
-                else "Save Config (locked)"
-            )
-            self.query_one("#run-loop", Button).label = (
-                "Run Loop" if self._form_supports_run() else "Run Loop (limited)"
-            )
+            self.query_one("#restart-reset", Button).label = "↺ Reset Counter"
+            self.query_one("#next-iteration", Button).label = "≫ Next Iteration"
+            self.query_one("#save-config", Button).label = "Save Config"
+            self.query_one("#run-loop", Button).label = "Run Loop"
         except Exception:
             pass
         self.query_one("#memory-replay", Button).disabled = not (
