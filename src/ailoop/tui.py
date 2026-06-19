@@ -1771,13 +1771,31 @@ class LoopDashboard(App[None]):
     def _ops_snapshot_text(self, state: object | None) -> str:
         if state is None:
             return "[b][#4ea3ff]OPS SNAPSHOT[/][/]\n\nNo loop selected."
+        schedule = self._schedule_card_text(state)
+        safety = (
+            self._safety_card_text(state)
+            .replace("Safety: ", "Safe: ")
+            .replace("ask commit ", "C ")
+            .replace("ask push ", "P ")
+            .replace("auto commit ", "aC ")
+            .replace("auto push ", "aP ")
+            .replace("backup ", "bk ")
+            .replace("limits ", "lim ")
+        )
+        notifications = (
+            self._notifications_text()
+            .replace("Notify: ", "N: ")
+            .replace("success ", "ok ")
+            .replace("failure ", "fail ")
+            .replace("complete ", "done ")
+            .replace("chan ", "ch ")
+        )
         return "\n".join(
             [
                 "[b][#4ea3ff]OPS SNAPSHOT[/][/]",
-                "",
-                self._schedule_card_text(state),
-                self._safety_card_text(state),
-                self._notifications_text(),
+                schedule,
+                safety,
+                notifications,
             ]
         )
 
