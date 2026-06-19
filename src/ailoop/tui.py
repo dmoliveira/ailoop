@@ -355,6 +355,7 @@ class LoopDashboard(App[None]):
 
     #loop_summary,
     #workspace_scope,
+    #ops_snapshot,
     #iteration_progress,
     #iteration_history,
     #schedule_card,
@@ -899,6 +900,7 @@ class LoopDashboard(App[None]):
             with Vertical(id="details"):
                 yield Static(id="iteration_progress", classes="card-static")
                 yield Static(id="iteration_history", classes="card-static")
+                yield Static(id="ops_snapshot", classes="card-static")
                 with Vertical(id="schedule_card", classes="right-card"):
                     yield Static("SCHEDULING", classes="panel-title")
                     yield Static(id="schedule-preview", classes="mini-note")
@@ -1766,6 +1768,19 @@ class LoopDashboard(App[None]):
             f"E {'on' if notify_email else 'off'}"
         )
 
+    def _ops_snapshot_text(self, state: object | None) -> str:
+        if state is None:
+            return "[b][#4ea3ff]OPS SNAPSHOT[/][/]\n\nNo loop selected."
+        return "\n".join(
+            [
+                "[b][#4ea3ff]OPS SNAPSHOT[/][/]",
+                "",
+                self._schedule_card_text(state),
+                self._safety_card_text(state),
+                self._notifications_text(),
+            ]
+        )
+
     def _legacy_detail_text(self, state: object | None) -> str:
         if state is None:
             return self._unselected_detail_message()
@@ -2354,6 +2369,7 @@ class LoopDashboard(App[None]):
             workspace_scope = self.query_one("#workspace_scope", Static)
             iteration_progress = self.query_one("#iteration_progress", Static)
             iteration_history = self.query_one("#iteration_history", Static)
+            ops_snapshot = self.query_one("#ops_snapshot", Static)
             schedule_preview = self.query_one("#schedule-preview", Static)
             safety_preview = self.query_one("#safety-preview", Static)
             metrics_today = self.query_one("#metrics_today", Static)
@@ -2374,6 +2390,7 @@ class LoopDashboard(App[None]):
             workspace_scope.update(self._workspace_scope_text(state))
             iteration_progress.update(self._iteration_progress_text(state))
             iteration_history.update(self._iteration_history_card_text(state))
+            ops_snapshot.update(self._ops_snapshot_text(state))
             schedule_preview.update(self._schedule_card_text(state))
             safety_preview.update(self._safety_card_text(state))
             metrics_today.update(self._metrics_today_text())
