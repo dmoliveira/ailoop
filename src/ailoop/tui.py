@@ -1771,31 +1771,47 @@ class LoopDashboard(App[None]):
     def _ops_snapshot_text(self, state: object | None) -> str:
         if state is None:
             return "[b][#4ea3ff]OPS SNAPSHOT[/][/]\n\nNo loop selected."
-        schedule = self._schedule_card_text(state)
-        safety = (
-            self._safety_card_text(state)
-            .replace("Safety: ", "Safe: ")
-            .replace("ask commit ", "C ")
-            .replace("ask push ", "P ")
-            .replace("auto commit ", "aC ")
-            .replace("auto push ", "aP ")
-            .replace("backup ", "bk ")
-            .replace("limits ", "lim ")
+        countdown = compact_countdown_text(self._schedule_countdown_text()).removeprefix("next ")
+        autonomy_raw = self._select_value("#safety-autonomy", "level-3")
+        autonomy = f"L{autonomy_raw.removeprefix('level-')}"
+        branch = {
+            "current": "current",
+            "new": "new",
+            "per-iteration": "per-it",
+        }.get(self._select_value("#safety-branch-strategy", "current"), "current")
+        limits = (
+            f"{self._input_value('#safety-max-runtime', '4h')}/"
+            f"{self._input_value('#safety-max-files-changed', '100')}/"
+            f"{self._input_value('#safety-max-commits', '10')}"
         )
-        notifications = (
-            self._notifications_text()
-            .replace("Notify: ", "N: ")
-            .replace("success ", "ok ")
-            .replace("failure ", "fail ")
-            .replace("complete ", "done ")
-            .replace("chan ", "ch ")
+        ask_commit = "on" if self._checkbox_value("#safety-ask-before-commit", True) else "off"
+        ask_push = "on" if self._checkbox_value("#safety-ask-before-push", True) else "off"
+        auto_commit = "on" if self._checkbox_value("#safety-auto-commit", False) else "off"
+        auto_push = "on" if self._checkbox_value("#safety-auto-push", False) else "off"
+        notify_states = "/".join(
+            [
+                "on" if self._checkbox_value("#notify-start", True) else "off",
+                "on" if self._checkbox_value("#notify-success", True) else "off",
+                "on" if self._checkbox_value("#notify-failure", True) else "off",
+                "on" if self._checkbox_value("#notify-limit", True) else "off",
+                "on" if self._checkbox_value("#notify-complete", True) else "off",
+            ]
+        )
+        notify_channels = "/".join(
+            [
+                "on" if self._checkbox_value("#notify-terminal", True) else "off",
+                "on" if self._checkbox_value("#notify-slack", False) else "off",
+                "on" if self._checkbox_value("#notify-email", False) else "off",
+            ]
         )
         return "\n".join(
             [
                 "[b][#4ea3ff]OPS SNAPSHOT[/][/]",
-                schedule,
-                safety,
-                notifications,
+                f"Sched {countdown} · Safe {autonomy} {branch} · lim {limits}",
+                (
+                    f"C/P {ask_commit}/{ask_push} · aC/P {auto_commit}/{auto_push} · "
+                    f"N {notify_states} · ch {notify_channels}"
+                ),
             ]
         )
 

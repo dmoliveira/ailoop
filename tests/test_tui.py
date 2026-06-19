@@ -2262,6 +2262,61 @@ def test_notifications_text_compacts_preview_summary() -> None:
     assert "Channels:" not in text
 
 
+def test_ops_snapshot_text_compacts_to_two_summary_lines() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        pass
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#schedule-type": FakeSelect("minutes"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("30"),
+        "#schedule-start-time": FakeInput("Now"),
+        "#schedule-timezone": FakeSelect("local"),
+        "#safety-autonomy": FakeSelect("level-3"),
+        "#safety-branch-strategy": FakeSelect("current"),
+        "#safety-ask-before-commit": FakeCheckbox(True),
+        "#safety-ask-before-push": FakeCheckbox(True),
+        "#safety-auto-commit": FakeCheckbox(False),
+        "#safety-auto-push": FakeCheckbox(False),
+        "#safety-max-runtime": FakeInput("4h"),
+        "#safety-max-files-changed": FakeInput("100"),
+        "#safety-max-commits": FakeInput("10"),
+        "#notify-start": FakeCheckbox(True),
+        "#notify-success": FakeCheckbox(True),
+        "#notify-failure": FakeCheckbox(True),
+        "#notify-limit": FakeCheckbox(True),
+        "#notify-complete": FakeCheckbox(True),
+        "#notify-terminal": FakeCheckbox(True),
+        "#notify-slack": FakeCheckbox(False),
+        "#notify-email": FakeCheckbox(False),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._ops_snapshot_text(FakeState())
+    lines = text.splitlines()
+
+    assert lines[0] == "[b][#4ea3ff]OPS SNAPSHOT[/][/]"
+    assert len(lines) == 3
+    assert "Sched 30m" in lines[1]
+    assert "Safe L3 current" in lines[1]
+    assert "C/P on/on" in lines[2]
+    assert "ch on/off/off" in lines[2]
+
+
 def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
