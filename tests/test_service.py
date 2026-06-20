@@ -267,6 +267,62 @@ def test_run_loop_keeps_scheduled_loops_idle(tmp_path: Path) -> None:
     assert final_state.completed_iterations == 0
 
 
+def test_scheduled_loop_preserves_pre_start_pause_request(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-pause")
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+    service.store.save(state)
+    service.request_control(state.loop_id, "pause")
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "paused"
+    assert final_state.completed_iterations == 0
+
+
+def test_scheduled_loop_preserves_pre_start_stop_request(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-stop")
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+    service.store.save(state)
+    service.request_control(state.loop_id, "stop")
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "stopped"
+    assert final_state.completed_iterations == 0
+
+
 def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     for loop_id in ["loop-a", "loop-b"]:

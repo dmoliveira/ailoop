@@ -1933,7 +1933,7 @@ class LoopDashboard(App[None]):
             "current": "current",
             "new": "new",
             "per-iteration": "per-it",
-        }.get(self._select_value("#safety-branch-strategy", "current"), "current")
+        }.get(self._select_value("#workspace-branch-strategy", "current"), "current")
         limits = (
             f"{self._input_value('#safety-max-runtime', '4h')}/"
             f"{self._input_value('#safety-max-files-changed', '100')}/"
