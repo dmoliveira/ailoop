@@ -69,6 +69,8 @@ class LoopService:
         shutil.rmtree(raw_loop_dir(self.state_root, loop_id))
 
     def request_control(self, loop_id: str, control: str) -> LoopState:
+        if control not in {"run", "pause", "stop"}:
+            raise ValueError(f"Invalid control: {control}")
         state = self.store.load(loop_id)
         state.control = control
         if control == "pause" and state.status not in {"completed", "failed", "stopped"}:

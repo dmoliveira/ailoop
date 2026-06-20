@@ -5,7 +5,10 @@ import subprocess
 import time
 from pathlib import Path
 
+from ..paths import read_last_lines
 from .base import RunnerResult
+
+CAPTURE_TAIL_LINES = 80
 
 
 class LocalRunner:
@@ -22,23 +25,26 @@ class LocalRunner:
         full_env = os.environ.copy()
         full_env.update(env)
         try:
-            process = subprocess.run(
-                [command, *args],
-                check=False,
-                capture_output=True,
-                text=True,
-                env=full_env,
-            )
-            stdout = process.stdout
-            stderr = process.stderr
-            exit_code = process.returncode
+            with stdout_log.open("w") as stdout_handle, stderr_log.open("w") as stderr_handle:
+                process = subprocess.Popen(
+                    [command, *args],
+                    stdout=stdout_handle,
+                    stderr=stderr_handle,
+                    text=True,
+                    env=full_env,
+                )
+                exit_code = process.wait()
+            # Keep log files as the full durable record and only load a bounded tail
+            # back into memory for summaries/status output after the child exits.
+            stdout = read_last_lines(stdout_log, CAPTURE_TAIL_LINES)
+            stderr = read_last_lines(stderr_log, CAPTURE_TAIL_LINES)
         except OSError as exc:
             stdout = ""
             stderr = str(exc)
             exit_code = 127
+            stdout_log.write_text(stdout)
+            stderr_log.write_text(stderr)
         duration = time.monotonic() - start
-        stdout_log.write_text(stdout)
-        stderr_log.write_text(stderr)
         return RunnerResult(
             command=[command, *args],
             exit_code=exit_code,

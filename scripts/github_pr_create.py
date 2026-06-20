@@ -21,7 +21,16 @@ def _token() -> str:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
         return token
-    return subprocess.check_output(["gh", "auth", "token"], text=True).strip()
+    try:
+        return subprocess.check_output(
+            ["gh", "auth", "token"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError(
+            "GitHub auth token not available. Set GITHUB_TOKEN/GH_TOKEN or run 'gh auth login'."
+        ) from exc
 
 
 def _body(args: argparse.Namespace) -> str:
@@ -50,7 +59,11 @@ def main() -> int:
     if args.body is not None and args.body_file is not None:
         parser.error("use either --body or --body-file, not both")
 
-    token = _token()
+    try:
+        token = _token()
+    except RuntimeError as exc:
+        sys.stderr.write(str(exc) + "\n")
+        return 1
     payload = {
         "title": args.title,
         "head": args.head,

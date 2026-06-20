@@ -226,7 +226,10 @@ class MemoryStore:
         actual_user = user_id or current_user_id()
         for directory in dirs:
             for path in sorted(directory.glob("*.json")):
-                entry = MemoryEntry.from_dict(json.loads(path.read_text()))
+                try:
+                    entry = MemoryEntry.from_dict(json.loads(path.read_text()))
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                    continue
                 if entry.archived and not include_archived:
                     continue
                 if favorites_only and not entry.favorite:

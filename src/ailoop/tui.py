@@ -17,6 +17,7 @@ from textual.reactive import reactive
 from textual.widgets import Button, Checkbox, DataTable, Header, Input, Select, Static, TextArea
 
 from .memory import MemoryStore
+from .paths import read_last_lines
 from .service import LoopService
 from .stats import STATUS_ICONS
 from .tasks import parse_task_file, render_task_file_error
@@ -53,8 +54,13 @@ def launch_in_tmux(config_path: Path, loop_id: str | None = None) -> None:
 def tail_text(path: Path, lines: int = 400) -> str:
     if not path.exists():
         return "<missing>"
-    chunks = path.read_text().splitlines()
-    return "\n".join(chunks[-lines:])
+    return read_last_lines(path, lines)
+
+
+def read_events(path: Path, limit: int = 80) -> str:
+    if not path.exists():
+        return "<missing>"
+    return read_last_lines(path, limit)
 
 
 def short_status(status: str) -> str:

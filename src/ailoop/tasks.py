@@ -49,7 +49,17 @@ class TaskFileState:
             "doing_count": len(self.doing),
             "done_count": len(self.done),
             "is_complete": self.is_complete,
-        }
+        } 
+
+
+@dataclass(slots=True)
+class TaskFileError(ValueError):
+    message: str
+    line_number: int | None = None
+    line_text: str | None = None
+
+    def __str__(self) -> str:
+        return self.message
 
 
 def render_task_file_check(state: TaskFileState) -> str:
@@ -78,13 +88,26 @@ def render_task_file_check_verbose(state: TaskFileState) -> str:
 
 
 def render_task_file_error(path: Path, exc: Exception) -> str:
+    details = [f"❌ bad task file: {path}"]
+    if isinstance(exc, TaskFileError) and exc.line_number is not None:
+        details.append(f"↳ line {exc.line_number}: {exc.message}")
+        if exc.line_text is not None:
+            details.append(f"↳ content: {exc.line_text}")
+    else:
+        details.append(f"↳ {exc}")
+    details.append("↳ tip: ailoop task-template --with-rules")
     return "\n".join(
-        [
-            f"❌ bad task file: {path}",
-            f"↳ {exc}",
-            "↳ tip: ailoop task-template --with-rules",
-        ]
+        details
     )
+
+
+def _task_file_error(
+    message: str,
+    *,
+    line_number: int | None = None,
+    line_text: str | None = None,
+) -> TaskFileError:
+    return TaskFileError(message=message, line_number=line_number, line_text=line_text)
 
 
 def parse_task_file(path: Path, max_doing: int = 1) -> TaskFileState:
@@ -97,53 +120,129 @@ def parse_task_file(path: Path, max_doing: int = 1) -> TaskFileState:
     seen: set[str] = set()
     saw_title = False
 
-    for raw_line in path.read_text().splitlines():
+    for line_number, raw_line in enumerate(path.read_text().splitlines(), start=1):
         line = raw_line.strip()
         if not line:
             continue
         if line == "# Loop Tasks":
             if current is not None:
-                raise ValueError("Title must be before task sections")
+                raise _task_file_error(
+                    "Title must be before task sections",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             if saw_title:
-                raise ValueError("Duplicate task file title")
+                raise _task_file_error(
+                    "Duplicate task file title",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             saw_title = True
             continue
         if line.startswith("## "):
             name = line[3:].strip()
             if name in sections:
                 if name in seen:
-                    raise ValueError(f"Duplicate task section: {name}")
+                    raise _task_file_error(
+                        f"Duplicate task section: {name}",
+                        line_number=line_number,
+                        line_text=raw_line,
+                    )
                 current = name
                 seen.add(name)
                 continue
-            raise ValueError(f"Unknown task section: {name}")
+            raise _task_file_error(
+                f"Unknown task section: {name}",
+                line_number=line_number,
+                line_text=raw_line,
+            )
         if current is None:
-            raise ValueError(f"Unexpected content outside task sections: {line}")
+            raise _task_file_error(
+                f"Unexpected content outside task sections: {line}",
+                line_number=line_number,
+                line_text=raw_line,
+            )
         if line == "- None":
             if sections[current]:
-                raise ValueError(f"Cannot mix - None with tasks in {current}")
+                raise _task_file_error(
+                    f"Cannot mix - None with tasks in {current}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             if none_flags[current]:
-                raise ValueError(f"Duplicate - None in {current}")
+                raise _task_file_error(
+                    f"Duplicate - None in {current}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             none_flags[current] = True
             continue
         if current in {"To do", "Doing"}:
             if none_flags[current]:
-                raise ValueError(f"Cannot mix tasks with - None in {current}")
+                raise _task_file_error(
+                    f"Cannot mix tasks with - None in {current}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             if not line.startswith("- [ ]"):
-                raise ValueError(f"Invalid task line in {current}: {line}")
+                raise _task_file_error(
+                    f"Invalid task line in {current}: {line}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
+            if line == "- [ ]":
+                raise _task_file_error(
+                    f"Empty task item in {current}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
+            if len(line) < 7 or line[5] != " ":
+                raise _task_file_error(
+                    f"Invalid task line in {current}: {line}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             task = line[6:].strip()
             if not task:
-                raise ValueError(f"Empty task item in {current}")
+                raise _task_file_error(
+                    f"Empty task item in {current}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             sections[current].append(task)
             continue
         if current == "Done":
             if none_flags[current]:
-                raise ValueError("Cannot mix tasks with - None in Done")
+                raise _task_file_error(
+                    "Cannot mix tasks with - None in Done",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             if not line.startswith("- [x]"):
-                raise ValueError(f"Invalid task line in Done: {line}")
+                raise _task_file_error(
+                    f"Invalid task line in Done: {line}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
+            if line == "- [x]":
+                raise _task_file_error(
+                    "Empty task item in Done",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
+            if len(line) < 7 or line[5] != " ":
+                raise _task_file_error(
+                    f"Invalid task line in Done: {line}",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             task = line[6:].strip()
             if not task:
-                raise ValueError("Empty task item in Done")
+                raise _task_file_error(
+                    "Empty task item in Done",
+                    line_number=line_number,
+                    line_text=raw_line,
+                )
             sections[current].append(task)
 
     missing = [name for name in sections if name not in seen]
