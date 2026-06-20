@@ -779,7 +779,7 @@ class LoopDashboard(App[None]):
             "schedule_start": self._input_value("#schedule-start-time", "Now"),
             "schedule_timezone": self._select_value("#schedule-timezone", "local"),
             "autonomy": self._select_value("#safety-autonomy", "level-3"),
-            "branch_strategy": self._select_value("#safety-branch-strategy", "current"),
+            "branch_strategy": self._select_value("#workspace-branch-strategy", "current"),
             "ask_before_commit": self._checkbox_value("#safety-ask-before-commit", True),
             "ask_before_push": self._checkbox_value("#safety-ask-before-push", True),
             "auto_commit": self._checkbox_value("#safety-auto-commit", False),
@@ -919,6 +919,21 @@ class LoopDashboard(App[None]):
                         yield Static("WORKSPACE & SCOPE", classes="panel-title")
                         yield Static("Root directory", classes="section-title")
                         yield Input(workspace_defaults["root"], id="workspace-root")
+                        with Horizontal(classes="form-row"):
+                            with Vertical(classes="field-group"):
+                                yield Static("Current branch", classes="section-title")
+                                yield Static(self.current_branch, id="workspace-current-branch")
+                            with Vertical(classes="field-group"):
+                                yield Static("Branch strategy", classes="section-title")
+                                yield Select(
+                                    [
+                                        ("Current branch", "current"),
+                                        ("New branch", "new"),
+                                        ("Branch per iteration", "per-iteration"),
+                                    ],
+                                    value=str(defaults["branch_strategy"]),
+                                    id="workspace-branch-strategy",
+                                )
                         yield Static("Included paths", classes="section-title")
                         yield TextArea(workspace_defaults["include"], id="workspace-include")
                         yield Static("Excluded paths", classes="section-title")
@@ -1020,17 +1035,6 @@ class LoopDashboard(App[None]):
                                 ],
                                 value=str(defaults["autonomy"]),
                                 id="safety-autonomy",
-                            )
-                        with Vertical(classes="field-group"):
-                            yield Static("Branch strategy", classes="section-title")
-                            yield Select(
-                                [
-                                    ("Current branch", "current"),
-                                    ("New branch", "new"),
-                                    ("Branch per iteration", "per-iteration"),
-                                ],
-                                value=str(defaults["branch_strategy"]),
-                                id="safety-branch-strategy",
                             )
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
@@ -1321,7 +1325,10 @@ class LoopDashboard(App[None]):
                 **defaults,
                 **getattr(loop_state, "dashboard_config", {}),
                 "prompt": loop_state.run_config.prompt,  # type: ignore[attr-defined]
-                "mode": "fixed" if loop_state.run_config.steps is not None else "infinite",  # type: ignore[attr-defined]
+                "mode": getattr(loop_state, "dashboard_config", {}).get(
+                    "mode",
+                    "fixed" if loop_state.run_config.steps is not None else "infinite",  # type: ignore[attr-defined]
+                ),
                 "iterations": str(loop_state.run_config.steps or 5),  # type: ignore[attr-defined]
                 "interval": interval_kind,
                 "interval_value": interval_value,
@@ -1351,7 +1358,7 @@ class LoopDashboard(App[None]):
         set_input("#schedule-start-time", values["schedule_start"])
         self.query_one("#schedule-timezone", Select).value = str(values["schedule_timezone"])
         self.query_one("#safety-autonomy", Select).value = str(values["autonomy"])
-        self.query_one("#safety-branch-strategy", Select).value = str(values["branch_strategy"])
+        self.query_one("#workspace-branch-strategy", Select).value = str(values["branch_strategy"])
         set_checkbox("#safety-ask-before-commit", values["ask_before_commit"])
         set_checkbox("#safety-ask-before-push", values["ask_before_push"])
         set_checkbox("#safety-auto-commit", values["auto_commit"])
@@ -1638,7 +1645,7 @@ class LoopDashboard(App[None]):
         interval_label = schedule_type_label(schedule_type, schedule_every)
         autonomy = autonomy_label(self._select_value("#safety-autonomy", "level-3"))
         branch_strategy = branch_strategy_label(
-            self._select_value("#safety-branch-strategy", "current")
+            self._select_value("#workspace-branch-strategy", "current")
         )
         next_run = self._schedule_countdown_text()
         return "\n".join(
@@ -1673,7 +1680,7 @@ class LoopDashboard(App[None]):
             ".git/**\n.venv/**\n.ailoop/**\nnode_modules/**",
         )
         branch_strategy = branch_strategy_label(
-            self._select_value("#safety-branch-strategy", "current")
+            self._select_value("#workspace-branch-strategy", "current")
         )
         _mode, schedule_type, schedule_every = self._state_mode_and_schedule(state)
         schedule_scope = schedule_type_label(schedule_type, schedule_every)
@@ -1792,6 +1799,9 @@ class LoopDashboard(App[None]):
         if state is None:
             return False
         loop_state = state
+        mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
+        if mode == "scheduled":
+            return False
         if loop_state.status not in {"idle", "paused", "stopped", "failed"}:  # type: ignore[attr-defined]
             return False
         return self.service.should_continue(loop_state)  # type: ignore[arg-type]
@@ -1846,7 +1856,7 @@ class LoopDashboard(App[None]):
             "current": "current branch",
             "new": "new branch",
             "per-iteration": "branch per iteration",
-        }.get(self._select_value("#safety-branch-strategy", "current"), "current branch")
+        }.get(self._select_value("#workspace-branch-strategy", "current"), "current branch")
         ask_before_commit = self._checkbox_value("#safety-ask-before-commit", True)
         ask_before_push = self._checkbox_value("#safety-ask-before-push", True)
         auto_commit = self._checkbox_value("#safety-auto-commit", False)
@@ -2073,10 +2083,17 @@ class LoopDashboard(App[None]):
         self._sync_form_controls()
         state = self._selected_state()
         status = state.status if state is not None else None
+        state_mode = (
+            self._state_mode_and_schedule(state)[0]
+            if state is not None
+            else self._config_mode_value()
+        )
         can_pause = status in {"running", "pause_requested"}
         can_resume = status in {"paused", "stopped", "failed", "idle"} or (
             status is None and self._form_supports_run()
         )
+        if state is not None and state_mode == "scheduled":
+            can_resume = False
         can_stop = status in {"running", "pause_requested", "paused"}
         can_restart = status in {"paused", "stopped", "failed", "completed"}
         can_restart_reset = state is not None and status not in {"running", "pause_requested"}
@@ -2710,7 +2727,7 @@ class LoopDashboard(App[None]):
     @on(
         Select.Changed,
         "#config-mode, #config-interval, #schedule-type, #schedule-timezone, #safety-autonomy, "
-        "#safety-branch-strategy",
+        "#workspace-branch-strategy",
     )
     def on_dashboard_select_changed(self, _event: Select.Changed) -> None:
         self._sync_schedule_with_config()
@@ -3020,6 +3037,12 @@ class LoopDashboard(App[None]):
             self.delete_armed = False
             state = self._selected_state()
             if state is not None:
+                if self._state_mode_and_schedule(state)[0] == "scheduled":
+                    self.notify(
+                        "scheduled loops wait for their configured run window",
+                        severity="warning",
+                    )
+                    return
                 state.control = "run"  # type: ignore[attr-defined]
                 self.service.store.save(state)
             self._spawn_resume(self.selected_loop_id)

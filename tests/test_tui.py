@@ -2125,7 +2125,7 @@ def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
         "#workspace-root": FakeInput("/tmp/workspace"),
         "#workspace-include": FakeTextArea("src/**\ntests/**"),
         "#workspace-exclude": FakeTextArea(".git/**\nnode_modules/**\ndist/**"),
-        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#workspace-branch-strategy": FakeSelect("per-iteration"),
         "#schedule-type": FakeSelect("minutes"),
         "#config-interval": FakeSelect("minutes"),
         "#schedule-every": FakeInput("45"),
@@ -2361,6 +2361,43 @@ def test_action_resume_selected_resets_control_to_run(tmp_path: Path) -> None:
     }
 
 
+def test_action_resume_selected_blocks_scheduled_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="resume-scheduled")
+    state.status = "idle"
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+
+    seen: dict[str, str] = {}
+    app._spawn_resume = lambda loop_id: seen.setdefault("loop_id", loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: seen.setdefault("message", message)  # type: ignore[method-assign]
+
+    app.action_resume_selected()
+
+    updated = service.load_loop(state.loop_id)
+    assert updated.control == "run"
+    assert seen == {"message": "scheduled loops wait for their configured run window"}
+
+
 def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = LoopService(tmp_path)
@@ -2435,7 +2472,7 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
     app._schedule_countdown_text = lambda: "in 6 hours"  # type: ignore[method-assign]
     app.query_one = lambda selector, *_args, **_kwargs: {  # type: ignore[method-assign]
         "#safety-autonomy": type("S", (), {"value": "level-3"})(),
-        "#safety-branch-strategy": type("S", (), {"value": "current"})(),
+        "#workspace-branch-strategy": type("S", (), {"value": "current"})(),
     }[selector]
 
     text = app._loop_summary_text(state)
@@ -2472,6 +2509,51 @@ def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
 
     assert "mode scheduled" in text
     assert "schedule every 6 hours" in text
+
+
+def test_saved_scheduled_loop_reloads_scheduled_mode_into_form(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-form")
+    state.dashboard_config = {
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "6",
+        "schedule_start": "09:30",
+        "schedule_timezone": "utc",
+    }
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert app.query_one("#config-mode").value == "scheduled"
+            assert app.query_one("#schedule-type").value == "hours"
+            assert app.query_one("#schedule-every").value == "6"
+
+    import asyncio
+
+    asyncio.run(run_test())
 
 
 def test_saved_dashboard_and_workspace_values_reload_into_forms(tmp_path: Path) -> None:
@@ -2532,9 +2614,10 @@ def test_saved_dashboard_and_workspace_values_reload_into_forms(tmp_path: Path) 
             assert app.query_one("#schedule-start-time").value == "09:30"
             assert app.query_one("#schedule-timezone").value == "utc"
             assert app.query_one("#safety-autonomy").value == "level-4"
-            assert app.query_one("#safety-branch-strategy").value == "per-iteration"
+            assert app.query_one("#workspace-branch-strategy").value == "per-iteration"
             assert app.query_one("#notify-slack").value is True
             assert app.query_one("#workspace-root").value == str(tmp_path / "workspace")
+            assert str(app.query_one("#workspace-current-branch").render()) == app.current_branch
             assert app.query_one("#workspace-include").text == "src/**\ndocs/**"
             assert app.query_one("#workspace-exclude").text == ".git/**\ndist/**"
 
@@ -2605,7 +2688,7 @@ def test_safety_card_text_compacts_preview_summary() -> None:
 
     widgets = {
         "#safety-autonomy": FakeSelect("level-4"),
-        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#workspace-branch-strategy": FakeSelect("per-iteration"),
         "#safety-ask-before-commit": FakeCheckbox(True),
         "#safety-ask-before-push": FakeCheckbox(False),
         "#safety-auto-commit": FakeCheckbox(True),
@@ -2676,7 +2759,7 @@ def test_ops_snapshot_text_compacts_to_two_summary_lines() -> None:
         "#schedule-start-time": FakeInput("Now"),
         "#schedule-timezone": FakeSelect("local"),
         "#safety-autonomy": FakeSelect("level-3"),
-        "#safety-branch-strategy": FakeSelect("current"),
+        "#workspace-branch-strategy": FakeSelect("current"),
         "#safety-ask-before-commit": FakeCheckbox(True),
         "#safety-ask-before-push": FakeCheckbox(True),
         "#safety-auto-commit": FakeCheckbox(False),

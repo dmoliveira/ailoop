@@ -112,6 +112,12 @@ class LoopService:
         with self.store.acquire_lock(loop_id):
             state = self.store.load(loop_id)
             self._validate_task_file(state)
+            if getattr(state, "dashboard_config", {}).get("mode") == "scheduled":
+                state.status = "idle"
+                state.updated_at = utc_now()
+                self.store.save(state)
+                self.store.append_event(loop_id, {"at": utc_now(), "event": "scheduled_waiting"})
+                return state
             if state.control not in {"pause", "stop"}:
                 state.control = "run"
             self.store.save(state)

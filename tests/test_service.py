@@ -240,6 +240,33 @@ def test_run_loop_resumes_when_control_is_reset_to_run(tmp_path: Path) -> None:
     assert final_state.completed_iterations == 1
 
 
+def test_run_loop_keeps_scheduled_loops_idle(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-idle")
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+    service.store.save(state)
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "idle"
+    assert final_state.completed_iterations == 0
+
+
 def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     for loop_id in ["loop-a", "loop-b"]:
