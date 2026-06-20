@@ -192,10 +192,12 @@ def autonomy_label(value: str) -> str:
 
 
 def schedule_type_label(value: str, raw_value: str) -> str:
+    minute_label = "minute" if raw_value == "1" else "minutes"
+    hour_label = "hour" if raw_value == "1" else "hours"
     return {
         "continuous": "continuous",
-        "minutes": f"every {raw_value} minutes",
-        "hours": f"every {raw_value} hours",
+        "minutes": f"every {raw_value} {minute_label}",
+        "hours": f"every {raw_value} {hour_label}",
         "daily": f"daily at {raw_value}",
         "weekly": f"weekly at {raw_value}",
         "cron": f"cron {raw_value}",
@@ -203,10 +205,14 @@ def schedule_type_label(value: str, raw_value: str) -> str:
 
 
 def compact_countdown_text(value: str) -> str:
-    if value.startswith("in ") and value.endswith(" minutes"):
-        return f"next {value.removeprefix('in ').removesuffix(' minutes')}m"
-    if value.startswith("in ") and value.endswith(" hours"):
-        return f"next {value.removeprefix('in ').removesuffix(' hours')}h"
+    if value.startswith("in ") and value.endswith((" minute", " minutes")):
+        trimmed = value.removeprefix("in ")
+        trimmed = trimmed.removesuffix(" minutes").removesuffix(" minute")
+        return f"next {trimmed}m"
+    if value.startswith("in ") and value.endswith((" hour", " hours")):
+        trimmed = value.removeprefix("in ")
+        trimmed = trimmed.removesuffix(" hours").removesuffix(" hour")
+        return f"next {trimmed}h"
     if value == "continuous":
         return "next cont"
     return f"next {value}"
@@ -1296,11 +1302,13 @@ class LoopDashboard(App[None]):
         )
 
     def _schedule_countdown_from(self, interval_kind: str, raw_value: str, start_time: str) -> str:
+        minute_label = "minute" if raw_value == "1" else "minutes"
+        hour_label = "hour" if raw_value == "1" else "hours"
         countdown = "manual"
         if interval_kind == "minutes":
-            countdown = f"in {raw_value} minutes"
+            countdown = f"in {raw_value} {minute_label}"
         elif interval_kind == "hours":
-            countdown = f"in {raw_value} hours"
+            countdown = f"in {raw_value} {hour_label}"
         elif interval_kind == "daily":
             countdown = f"next daily window from {start_time}"
         elif interval_kind == "weekly":
