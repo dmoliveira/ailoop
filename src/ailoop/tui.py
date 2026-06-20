@@ -1846,13 +1846,13 @@ class LoopDashboard(App[None]):
                 "[b][#4ea3ff]ITERATION PROGRESS[/][/]",
                 "",
                 (
-                    "Current iteration: "
+                    "Iter: "
                     f"{loop_state.current_iteration or loop_state.completed_iterations} / "
                     f"{target or '∞'}"
                 ),
-                f"Progress bar: {progress}",
+                f"Bar: {progress}",
                 "",
-                "Step checklist",
+                "Steps",
                 *step_status_lines(loop_state.completed_iterations, target, loop_state.status),  # type: ignore[attr-defined]
             ]
         )
@@ -1864,19 +1864,19 @@ class LoopDashboard(App[None]):
         lines = ["[b][#4ea3ff]ITERATION HISTORY[/][/]", ""]
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
         if not loop_state.iterations:  # type: ignore[attr-defined]
-            lines.append("#1 Queued · waiting for first iteration")
+            lines.append("#1 Queue · waiting")
             if target:
                 for number in range(2, min(target, 5) + 1):
-                    lines.append(f"#{number} Queued · pending")
+                    lines.append(f"#{number} Queue · pending")
             return "\n".join(lines)
         has_unfinished_current = False
         for item in loop_state.iterations[-6:]:  # type: ignore[attr-defined]
             if item.success is True:
-                state_label = "Completed"
+                state_label = "Done"
             elif item.success is False:
-                state_label = "Failed"
+                state_label = "Fail"
             else:
-                state_label = "Running"
+                state_label = "Run"
             if item.number == loop_state.current_iteration and item.success is None:  # type: ignore[attr-defined]
                 has_unfinished_current = True
             lines.append(
@@ -1884,13 +1884,13 @@ class LoopDashboard(App[None]):
                 f"{format_duration(item.duration_seconds)}"
             )
         if loop_state.status == "running" and not has_unfinished_current:  # type: ignore[attr-defined]
-            lines.append(f"#{loop_state.current_iteration} Running · now")  # type: ignore[attr-defined]
+            lines.append(f"#{loop_state.current_iteration} Run · now")  # type: ignore[attr-defined]
         queued_start = len(loop_state.iterations) + 1  # type: ignore[attr-defined]
         if target:
             for number in range(queued_start, min(target, queued_start + 2) + 1):
                 if loop_state.status == "running" and number == loop_state.current_iteration:  # type: ignore[attr-defined]
                     continue
-                lines.append(f"#{number} Queued · pending")
+                lines.append(f"#{number} Queue · pending")
         return "\n".join(lines)
 
     def _actions_status_text(self, state: object | None) -> str:

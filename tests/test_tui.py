@@ -2428,8 +2428,8 @@ def test_iteration_progress_text_uses_current_iteration_while_running(tmp_path: 
 
     text = app._iteration_progress_text(state)
 
-    assert "Current iteration: 2 / 5" in text
-    assert "Progress bar: █████░░░░░░░ 2/5" in text
+    assert "Iter: 2 / 5" in text
+    assert "Bar: █████░░░░░░░ 2/5" in text
     assert "1/5" not in text
 
 
@@ -3141,8 +3141,8 @@ def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path:
 
     text = app._iteration_history_card_text(state)
 
-    assert "#2 Running" in text
-    assert "#2 Failed" not in text
-    assert "#2 Running · " in text
+    assert "#2 Run" in text
+    assert "#2 Fail" not in text
+    assert "#2 Run · " in text
     assert ":40 · 8m 00s" in text
     assert "2026-05-16" not in text
