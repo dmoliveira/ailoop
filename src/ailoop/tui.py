@@ -762,6 +762,53 @@ class LoopDashboard(App[None]):
             "exclude": ".git/**\n.venv/**\n.ailoop/**\nnode_modules/**",
         }
 
+    def _dashboard_form_values(self) -> dict[str, object]:
+        return {
+            "prompt": self._textarea_value("#config-prompt", self._default_prompt_text()),
+            "mode": self._config_mode_value(),
+            "iterations": self._input_value("#config-iterations", "5"),
+            "interval": self._config_interval_value(),
+            "interval_value": self._input_value("#config-interval-value", "0"),
+            "quiet_hours": self._checkbox_value("#config-quiet-hours", False),
+            "quiet_start": self._input_value("#config-quiet-start", "22:00"),
+            "quiet_end": self._input_value("#config-quiet-end", "07:00"),
+            "jitter": self._checkbox_value("#config-jitter", False),
+            "jitter_value": self._input_value("#config-jitter-value", "0-5"),
+            "schedule_type": self._select_value("#schedule-type", "continuous"),
+            "schedule_every": self._input_value("#schedule-every", "0"),
+            "schedule_start": self._input_value("#schedule-start-time", "Now"),
+            "schedule_timezone": self._select_value("#schedule-timezone", "local"),
+            "autonomy": self._select_value("#safety-autonomy", "level-3"),
+            "branch_strategy": self._select_value("#safety-branch-strategy", "current"),
+            "ask_before_commit": self._checkbox_value("#safety-ask-before-commit", True),
+            "ask_before_push": self._checkbox_value("#safety-ask-before-push", True),
+            "auto_commit": self._checkbox_value("#safety-auto-commit", False),
+            "auto_push": self._checkbox_value("#safety-auto-push", False),
+            "create_backup_branch": self._checkbox_value("#safety-create-backup-branch", True),
+            "auto_stop_on_limit": self._checkbox_value("#safety-auto-stop-on-limit", True),
+            "max_runtime": self._input_value("#safety-max-runtime", "4h"),
+            "max_files_changed": self._input_value("#safety-max-files-changed", "100"),
+            "max_commits": self._input_value("#safety-max-commits", "10"),
+            "max_token_usage": self._input_value("#safety-max-token-usage", "not tracked"),
+            "max_cost": self._input_value("#safety-max-cost", "not tracked"),
+            "notify_start": self._checkbox_value("#notify-start", True),
+            "notify_success": self._checkbox_value("#notify-success", True),
+            "notify_failure": self._checkbox_value("#notify-failure", True),
+            "notify_limit": self._checkbox_value("#notify-limit", True),
+            "notify_complete": self._checkbox_value("#notify-complete", True),
+            "notify_terminal": self._checkbox_value("#notify-terminal", True),
+            "notify_slack": self._checkbox_value("#notify-slack", False),
+            "notify_email": self._checkbox_value("#notify-email", False),
+        }
+
+    def _workspace_form_values(self) -> dict[str, str]:
+        defaults = self._workspace_form_defaults()
+        return {
+            "root": self._input_value("#workspace-root", defaults["root"]),
+            "include": self._textarea_value("#workspace-include", defaults["include"]),
+            "exclude": self._textarea_value("#workspace-exclude", defaults["exclude"]),
+        }
+
     def compose(self) -> ComposeResult:
         defaults = self._config_form_defaults()
         workspace_defaults = self._workspace_form_defaults()
@@ -1205,11 +1252,20 @@ class LoopDashboard(App[None]):
             return default
 
     def _sync_config_form_from_state(self, state: object | None) -> None:
+        def set_checkbox(selector: str, value: object) -> None:
+            self.query_one(selector, Checkbox).value = bool(value)
+
+        def set_input(selector: str, value: object) -> None:
+            self.query_one(selector, Input).value = str(value)
+
+        defaults = self._config_form_defaults()
+        workspace_defaults = self._workspace_form_defaults()
         if state is None:
             bound_id = "__defaults__"
             if self._config_bound_loop_id == bound_id:
                 return
-            values = self._config_form_defaults()
+            values = defaults
+            workspace_values = workspace_defaults
         else:
             loop_state = state
             bound_id = loop_state.loop_id  # type: ignore[attr-defined]
@@ -1217,32 +1273,59 @@ class LoopDashboard(App[None]):
                 return
             interval_kind, interval_value = interval_text(loop_state.run_config.pause_seconds)  # type: ignore[attr-defined]
             values = {
+                **defaults,
+                **getattr(loop_state, "dashboard_config", {}),
                 "prompt": loop_state.run_config.prompt,  # type: ignore[attr-defined]
                 "mode": "fixed" if loop_state.run_config.steps is not None else "infinite",  # type: ignore[attr-defined]
                 "iterations": str(loop_state.run_config.steps or 5),  # type: ignore[attr-defined]
                 "interval": interval_kind,
                 "interval_value": interval_value,
-                "quiet_hours": False,
-                "quiet_start": "22:00",
-                "quiet_end": "07:00",
-                "jitter": False,
-                "jitter_value": "0-5",
+            }
+            workspace_values = {
+                **workspace_defaults,
+                **getattr(loop_state, "workspace_config", {}),
             }
         self.query_one("#config-prompt", TextArea).text = str(values["prompt"])
         self.query_one("#config-mode", Select).value = str(values["mode"])
-        self.query_one("#config-iterations", Input).value = str(values["iterations"])
+        set_input("#config-iterations", values["iterations"])
         self.query_one("#config-interval", Select).value = str(values["interval"])
-        self.query_one("#config-interval-value", Input).value = str(values["interval_value"])
-        self.query_one("#config-quiet-hours", Checkbox).value = bool(values["quiet_hours"])
-        self.query_one("#config-quiet-start", Input).value = str(values["quiet_start"])
-        self.query_one("#config-quiet-end", Input).value = str(values["quiet_end"])
-        self.query_one("#config-jitter", Checkbox).value = bool(values["jitter"])
-        self.query_one("#config-jitter-value", Input).value = str(values["jitter_value"])
+        set_input("#config-interval-value", values["interval_value"])
+        set_checkbox("#config-quiet-hours", values["quiet_hours"])
+        set_input("#config-quiet-start", values["quiet_start"])
+        set_input("#config-quiet-end", values["quiet_end"])
+        set_checkbox("#config-jitter", values["jitter"])
+        set_input("#config-jitter-value", values["jitter_value"])
+        set_input("#workspace-root", workspace_values["root"])
+        self.query_one("#workspace-include", TextArea).text = str(workspace_values["include"])
+        self.query_one("#workspace-exclude", TextArea).text = str(workspace_values["exclude"])
         try:
-            self.query_one("#schedule-type", Select).value = str(values["interval"])
-            self.query_one("#schedule-every", Input).value = str(values["interval_value"])
+            self.query_one("#schedule-type", Select).value = str(values["schedule_type"])
+            set_input("#schedule-every", values["schedule_every"])
         except Exception:
             pass
+        set_input("#schedule-start-time", values["schedule_start"])
+        self.query_one("#schedule-timezone", Select).value = str(values["schedule_timezone"])
+        self.query_one("#safety-autonomy", Select).value = str(values["autonomy"])
+        self.query_one("#safety-branch-strategy", Select).value = str(values["branch_strategy"])
+        set_checkbox("#safety-ask-before-commit", values["ask_before_commit"])
+        set_checkbox("#safety-ask-before-push", values["ask_before_push"])
+        set_checkbox("#safety-auto-commit", values["auto_commit"])
+        set_checkbox("#safety-auto-push", values["auto_push"])
+        set_checkbox("#safety-create-backup-branch", values["create_backup_branch"])
+        set_checkbox("#safety-auto-stop-on-limit", values["auto_stop_on_limit"])
+        set_input("#safety-max-runtime", values["max_runtime"])
+        set_input("#safety-max-files-changed", values["max_files_changed"])
+        set_input("#safety-max-commits", values["max_commits"])
+        set_input("#safety-max-token-usage", values["max_token_usage"])
+        set_input("#safety-max-cost", values["max_cost"])
+        set_checkbox("#notify-start", values["notify_start"])
+        set_checkbox("#notify-success", values["notify_success"])
+        set_checkbox("#notify-failure", values["notify_failure"])
+        set_checkbox("#notify-limit", values["notify_limit"])
+        set_checkbox("#notify-complete", values["notify_complete"])
+        set_checkbox("#notify-terminal", values["notify_terminal"])
+        set_checkbox("#notify-slack", values["notify_slack"])
+        set_checkbox("#notify-email", values["notify_email"])
         self._config_bound_loop_id = bound_id
 
     def _build_run_config_from_form(self, state: object | None = None):
@@ -1664,9 +1747,17 @@ class LoopDashboard(App[None]):
             actions.append("stop ready")
         if status in {"paused", "stopped", "failed", "completed"}:
             actions.append("restart ready")
-        actions.append("next blocked")
+        actions.append("next ready" if self._can_next_iteration(loop_state) else "next blocked")
         action_text = " · ".join(actions)
         return f"{short_loop_id(loop_state.loop_id)} · {short_status(status)} · {action_text}"
+
+    def _can_next_iteration(self, state: object | None) -> bool:
+        if state is None:
+            return False
+        loop_state = state
+        if loop_state.status not in {"idle", "paused", "stopped", "failed"}:  # type: ignore[attr-defined]
+            return False
+        return self.service.should_continue(loop_state)  # type: ignore[arg-type]
 
     def _schedule_countdown_text(self) -> str:
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
@@ -1952,7 +2043,7 @@ class LoopDashboard(App[None]):
         can_stop = status in {"running", "pause_requested", "paused"}
         can_restart = status in {"paused", "stopped", "failed", "completed"}
         can_restart_reset = state is not None and status not in {"running", "pause_requested"}
-        can_next_iteration = False
+        can_next_iteration = self._can_next_iteration(state)
         memory_entry = self._primary_memory_entry()
         for button_id, active in {
             "filter-running": self.filter_mode == "running",
@@ -2445,6 +2536,9 @@ class LoopDashboard(App[None]):
             safety_preview.update(self._safety_card_text(state))
             metrics_today.update(self._metrics_today_text())
             notifications_preview.update(self._notifications_text())
+            schedule_preview.remove_class("detail-preview-hidden")
+            safety_preview.remove_class("detail-preview-hidden")
+            notifications_preview.remove_class("detail-preview-hidden")
         else:
             self.query_one("#detail_view", Static).update(self._legacy_detail_text(state))
         if self.log_kind == "memory":
@@ -2498,7 +2592,7 @@ class LoopDashboard(App[None]):
         elif button_id == "restart-reset":
             self.action_restart_reset_selected()
         elif button_id == "next-iteration":
-            self.notify("next iteration is not available for this runner yet")
+            self.action_next_iteration()
         elif button_id == "save-config":
             self.action_save_config()
         elif button_id == "run-loop":
@@ -2887,6 +2981,10 @@ class LoopDashboard(App[None]):
     def action_resume_selected(self) -> None:
         if self.selected_loop_id:
             self.delete_armed = False
+            state = self._selected_state()
+            if state is not None:
+                state.control = "run"  # type: ignore[attr-defined]
+                self.service.store.save(state)
             self._spawn_resume(self.selected_loop_id)
             self.notify(f"resume sent: {self.selected_loop_id}")
             self.refresh_data()
@@ -2916,6 +3014,8 @@ class LoopDashboard(App[None]):
             self.notify("stop or pause the loop before saving config changes", severity="warning")
             return
         state.run_config = self._build_run_config_from_form(state)
+        state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
+        state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
         state.updated_at = datetime.now(UTC).isoformat()
         self.service.store.save(state)
         self.notify(f"config saved: {state.loop_id}")
@@ -2935,6 +3035,9 @@ class LoopDashboard(App[None]):
             "stop_requested",
         }:
             state.run_config = self._build_run_config_from_form(state)
+            state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
+            state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
+            state.control = "run"  # type: ignore[attr-defined]
             state.updated_at = datetime.now(UTC).isoformat()
             self.service.store.save(state)
             self._spawn_resume(state.loop_id)
@@ -2943,10 +3046,26 @@ class LoopDashboard(App[None]):
             return
         run_config = self._build_run_config_from_form()
         created = self.service.create_loop(run_config)
+        created.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
+        created.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
+        self.service.store.save(created)
         self.selected_loop_id = created.loop_id
         self._config_bound_loop_id = None
         self._spawn_resume(created.loop_id)
         self.notify(f"loop started: {created.loop_id}")
+        self.refresh_data()
+
+    def action_next_iteration(self) -> None:
+        state = self._selected_state()
+        if state is None:
+            self.notify("select a loop before queueing the next iteration", severity="warning")
+            return
+        if not self._can_next_iteration(state):
+            self.notify("next iteration is not available right now", severity="warning")
+            return
+        self.service.request_single_iteration(state.loop_id)  # type: ignore[attr-defined]
+        self._spawn_resume(state.loop_id)  # type: ignore[attr-defined]
+        self.notify(f"next iteration queued: {state.loop_id}")  # type: ignore[attr-defined]
         self.refresh_data()
 
     def action_restart_selected(self) -> None:
@@ -2954,7 +3073,10 @@ class LoopDashboard(App[None]):
         if state is None:
             return
         state.run_config = self._build_run_config_from_form(state)
+        state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
+        state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
         state.control = "run"
+        state.pending_single_iteration = False  # type: ignore[attr-defined]
         state.status = "idle"
         state.updated_at = datetime.now(UTC).isoformat()
         self.service.store.save(state)
@@ -2967,7 +3089,10 @@ class LoopDashboard(App[None]):
         if state is None:
             return
         state.run_config = self._build_run_config_from_form(state)
+        state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
+        state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
         state.control = "run"
+        state.pending_single_iteration = False  # type: ignore[attr-defined]
         state.status = "idle"
         state.current_iteration = 0
         state.completed_iterations = 0

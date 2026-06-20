@@ -111,6 +111,9 @@ class LoopState:
     total_duration_seconds: float = 0.0
     average_duration_seconds: float = 0.0
     last_summary: str | None = None
+    pending_single_iteration: bool = False
+    dashboard_config: dict[str, Any] = field(default_factory=dict)
+    workspace_config: dict[str, str] = field(default_factory=dict)
     iterations: list[IterationRecord] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -137,5 +140,8 @@ class LoopState:
             total_duration_seconds=data.get("total_duration_seconds", 0.0),
             average_duration_seconds=data.get("average_duration_seconds", 0.0),
             last_summary=data.get("last_summary"),
+            pending_single_iteration=data.get("pending_single_iteration", False),
+            dashboard_config=data.get("dashboard_config", {}),
+            workspace_config=data.get("workspace_config", {}),
             iterations=iterations,
         )

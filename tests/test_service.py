@@ -82,6 +82,164 @@ def test_request_control_rejects_invalid_values(tmp_path: Path) -> None:
         service.request_control(state.loop_id, "invalid")
 
 
+def test_request_single_iteration_runs_one_iteration_then_pauses(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=None,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="single-step")
+
+    requested = service.request_single_iteration(state.loop_id)
+    assert requested.pending_single_iteration is True
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "paused"
+    assert final_state.completed_iterations == 1
+    assert final_state.pending_single_iteration is False
+
+
+def test_request_single_iteration_rejects_active_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=2,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="active-step")
+    state.status = "running"
+    service.store.save(state)
+
+    with pytest.raises(RuntimeError, match="Loop is already active: active-step"):
+        service.request_single_iteration(state.loop_id)
+
+
+def test_request_single_iteration_rejects_completed_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="done-step")
+    service.run_loop(state.loop_id)
+
+    with pytest.raises(RuntimeError, match="Loop has no pending iterations: done-step"):
+        service.request_single_iteration(state.loop_id)
+
+
+def test_run_loop_preserves_pre_start_pause_request(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=2,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="pause-before-start")
+    service.request_control(state.loop_id, "pause")
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "paused"
+    assert final_state.completed_iterations == 0
+
+
+def test_run_loop_preserves_pre_start_stop_request(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=2,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="stop-before-start")
+    service.request_control(state.loop_id, "stop")
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "stopped"
+    assert final_state.completed_iterations == 0
+
+
+def test_run_loop_resumes_when_control_is_reset_to_run(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="resume-run")
+    state.status = "paused"
+    state.control = "run"
+    service.store.save(state)
+
+    final_state = service.run_loop(state.loop_id)
+
+    assert final_state.status == "completed"
+    assert final_state.completed_iterations == 1
+
+
 def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     for loop_id in ["loop-a", "loop-b"]:
