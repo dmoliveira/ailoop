@@ -785,8 +785,8 @@ def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
     text = app._loop_summary_text(FakeState())
 
     assert "Mode: Scheduled" in text
-    assert "Next run: in 6 hours" in text
-    assert "Next run: in 1 minutes" not in text
+    assert "Next: in 6 hours" in text
+    assert "Next: in 1 minutes" not in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
@@ -2723,7 +2723,13 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="scheduled-loop")
-    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "6"}
+    state.dashboard_config = {
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "6",
+        "autonomy": "level-4",
+        "branch_strategy": "per-iteration",
+    }
     service.store.save(state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
@@ -2737,7 +2743,8 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
     text = app._loop_summary_text(state)
 
     assert "Mode: Scheduled" in text
-    assert "Interval: every 6 hours" in text
+    assert "Mode: Scheduled · every 6 hours" in text
+    assert "Next: in 6 hours · branch per iteration · Level 4 Edit + Commit" in text
 
 
 def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
@@ -3077,14 +3084,16 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
 
     text = app._loop_summary_text(state)
 
-    assert "Branch/Autonomy: current branch · Level 3 Edit" in text
+    assert "Loop: summary-loop ·" in text
+    assert "Mode: Fixed Count · every 1 minutes" in text
+    assert "Next: in 30 minutes · current branch · Level 3 Edit" in text
     assert "Runner/Agent: echo · orchestrator" in text
     assert "Updated/Avg:" in text
-    assert "Branch strategy:" not in text
-    assert "\nAutonomy:" not in text
-    assert "\nRunner:" not in text
-    assert "\nAgent:" not in text
-    assert "Avg runtime:" not in text
+    assert "Last: Modified 6 files and passing tests." in text
+    assert "Name:" not in text
+    assert "State:" not in text
+    assert "Interval:" not in text
+    assert "Next run:" not in text
 
 
 def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path: Path) -> None:
