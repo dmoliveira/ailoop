@@ -1175,7 +1175,7 @@ class LoopDashboard(App[None]):
     def on_mount(self) -> None:
         self._sync_layout_mode()
         table = self.query_one(DataTable)
-        table.add_columns("Loop", "Status", "Progress", "Agent", "Fails")
+        table.add_columns("Loop", "Status", "Iter", "Mode", "Agent")
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
 
@@ -2559,18 +2559,29 @@ class LoopDashboard(App[None]):
             self.selected_loop_id = states[0].loop_id if states else None
 
         if not states:
-            table.add_row("-", self.filter_mode, "-", "-", key="empty")
+            table.add_row("-", self.filter_mode, "-", "-", "-", key="empty")
 
         for state in states:
             target = state.run_config.steps
-            progress = render_progress_text(state.completed_iterations, target)
+            progress_count = effective_iteration_count(
+                state.completed_iterations,
+                state.current_iteration,
+                state.status,
+            )
+            iteration_text = f"{progress_count}/{target or '∞'}"
             icon = STATUS_ICONS.get(state.status, "•")
+            mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(state)
+            mode_label = {
+                "fixed": "fixed",
+                "infinite": "infinite",
+                "scheduled": "scheduled",
+            }.get(mode, mode)
             table.add_row(
                 short_loop_id(state.loop_id),
                 f"{icon} {short_status(state.status)}",
-                progress,
+                iteration_text,
+                mode_label,
                 (state.run_config.agent or "-")[:12],
-                str(state.consecutive_failures),
                 key=state.loop_id,
             )
 

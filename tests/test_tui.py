@@ -3,6 +3,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from textual.widgets import DataTable
 
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig
@@ -99,6 +100,48 @@ def test_tui_mounts_and_loads_loop(tmp_path: Path) -> None:
             app.refresh_data()
             await pilot.pause()
             assert app.selected_loop_id == "tui1"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_loop_table_uses_iteration_and_mode_columns(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="table-loop")
+    state.status = "running"
+    state.current_iteration = 2
+    state.completed_iterations = 1
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            table = app.query_one(DataTable)
+            row = table.get_row("table-loop")
+            assert row[0] == "table-loop"
+            assert "running" in row[1]
+            assert row[2] == "2/5"
+            assert row[3] == "fixed"
+            assert row[4] == "orchestrator"
 
     import asyncio
 
