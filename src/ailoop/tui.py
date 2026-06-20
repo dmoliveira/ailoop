@@ -1184,12 +1184,57 @@ class LoopDashboard(App[None]):
             return value * 60
         return 0
 
+    def _schedule_interval_seconds(self) -> int:
+        interval_kind = self._select_value("#schedule-type", "continuous")
+        raw_value = self._input_value("#schedule-every", "0")
+        if interval_kind == "continuous":
+            return 0
+        try:
+            value = max(0, int(raw_value))
+        except ValueError:
+            return 0
+        if interval_kind == "hours":
+            return value * 3600
+        if interval_kind == "minutes":
+            return value * 60
+        return 0
+
     def _form_supports_run(self) -> bool:
-        return self._config_mode_value() != "scheduled" and self._config_interval_value() in {
-            "continuous",
-            "minutes",
-            "hours",
-        }
+        mode = self._config_mode_value()
+        if mode == "scheduled":
+            return True
+        return self._config_interval_value() in {"continuous", "minutes", "hours"}
+
+    def _state_mode_and_schedule(self, state: object | None) -> tuple[str, str, str]:
+        if state is not None:
+            loop_state = state
+            dashboard_config = getattr(loop_state, "dashboard_config", {}) or {}
+            if dashboard_config:
+                mode = str(dashboard_config.get("mode", "fixed"))
+                schedule_type = str(
+                    dashboard_config.get(
+                        "schedule_type",
+                        dashboard_config.get("interval", self._config_interval_value()),
+                    )
+                )
+                schedule_every = str(
+                    dashboard_config.get(
+                        "schedule_every",
+                        dashboard_config.get(
+                            "interval_value",
+                            self._input_value("#schedule-every", "0"),
+                        ),
+                    )
+                )
+                return mode, schedule_type, schedule_every
+            interval_kind, interval_value = interval_text(loop_state.run_config.pause_seconds)  # type: ignore[attr-defined]
+            mode = "fixed" if loop_state.run_config.steps is not None else "infinite"  # type: ignore[attr-defined]
+            return mode, interval_kind, interval_value
+        return (
+            self._config_mode_value(),
+            self._select_value("#schedule-type", self._config_interval_value()),
+            self._input_value("#schedule-every", self._input_value("#config-interval-value", "0")),
+        )
 
     def _sync_form_controls(self) -> None:
         mode = self._config_mode_value()
@@ -1377,7 +1422,11 @@ class LoopDashboard(App[None]):
             runner=runner_name,
             agent=agent,
             steps=iterations if mode == "fixed" else None,
-            pause_seconds=self._config_interval_seconds(),
+            pause_seconds=(
+                self._schedule_interval_seconds()
+                if mode == "scheduled"
+                else self._config_interval_seconds()
+            ),
             continue_on_error=continue_on_error,
             retry_count=retry_count,
             pre_prompt_enabled=pre_prompt_enabled,
@@ -1579,18 +1628,14 @@ class LoopDashboard(App[None]):
             )
         loop_state = state
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        mode, schedule_type, schedule_every = self._state_mode_and_schedule(loop_state)
         progress_count = effective_iteration_count(
             loop_state.completed_iterations,  # type: ignore[attr-defined]
             loop_state.current_iteration,  # type: ignore[attr-defined]
             loop_state.status,  # type: ignore[attr-defined]
         )
         progress = render_progress_text(progress_count, target, width=8)
-        interval_kind, interval_value = interval_text(loop_state.run_config.pause_seconds)  # type: ignore[attr-defined]
-        interval_label = {
-            "continuous": "continuous",
-            "minutes": f"every {interval_value} minutes",
-            "hours": f"every {interval_value} hours",
-        }.get(interval_kind, interval_kind)
+        interval_label = schedule_type_label(schedule_type, schedule_every)
         autonomy = autonomy_label(self._select_value("#safety-autonomy", "level-3"))
         branch_strategy = branch_strategy_label(
             self._select_value("#safety-branch-strategy", "current")
@@ -1602,7 +1647,7 @@ class LoopDashboard(App[None]):
                 "",
                 f"Name: {loop_state.loop_id}",  # type: ignore[attr-defined]
                 f"State: {self._status_markup(loop_state.status)}",  # type: ignore[attr-defined]
-                f"Mode: {loop_mode_text(target)}",
+                f"Mode: {mode.title() if mode != 'fixed' else loop_mode_text(target)}",
                 f"Iterations: {progress}",
                 f"Interval: {interval_label}",
                 f"Next run: {next_run}",
@@ -1630,11 +1675,8 @@ class LoopDashboard(App[None]):
         branch_strategy = branch_strategy_label(
             self._select_value("#safety-branch-strategy", "current")
         )
-        schedule_type = self._select_value("#schedule-type", self._config_interval_value())
-        schedule_scope = schedule_type_label(
-            schedule_type,
-            self._input_value("#schedule-every", "0"),
-        )
+        _mode, schedule_type, schedule_every = self._state_mode_and_schedule(state)
+        schedule_scope = schedule_type_label(schedule_type, schedule_every)
         quiet_hours = "on" if self._checkbox_value("#config-quiet-hours", False) else "off"
         include_count = len([line for line in include_paths.splitlines() if line.strip()])
         exclude_count = len([line for line in exclude_paths.splitlines() if line.strip()])
@@ -1651,13 +1693,8 @@ class LoopDashboard(App[None]):
         )
 
     def _config_status_text(self, state: object | None) -> str:
-        mode = self._config_mode_value()
-        interval = self._config_interval_value()
-        schedule_type = self._select_value("#schedule-type", interval)
-        schedule_scope = schedule_type_label(
-            schedule_type,
-            self._input_value("#schedule-every", "0"),
-        )
+        mode, schedule_type, schedule_every = self._state_mode_and_schedule(state)
+        schedule_scope = schedule_type_label(schedule_type, schedule_every)
         if state is None:
             return (
                 "Draft config · new loop launch · "
@@ -3023,11 +3060,9 @@ class LoopDashboard(App[None]):
 
     def action_run_loop(self) -> None:
         if not self._form_supports_run():
-            self.notify(
-                "scheduled mode is visible in the dashboard but not executable yet",
-                severity="warning",
-            )
+            self.notify("current loop configuration cannot run yet", severity="warning")
             return
+        mode = self._config_mode_value()
         state = self._selected_state()
         if state is not None and state.status not in {
             "running",
@@ -3038,8 +3073,14 @@ class LoopDashboard(App[None]):
             state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
             state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
             state.control = "run"  # type: ignore[attr-defined]
+            if mode == "scheduled":
+                state.status = "idle"  # type: ignore[attr-defined]
             state.updated_at = datetime.now(UTC).isoformat()
             self.service.store.save(state)
+            if mode == "scheduled":
+                self.notify(f"schedule saved: {state.loop_id}")
+                self.refresh_data()
+                return
             self._spawn_resume(state.loop_id)
             self.notify(f"run sent: {state.loop_id}")
             self.refresh_data()
@@ -3051,6 +3092,10 @@ class LoopDashboard(App[None]):
         self.service.store.save(created)
         self.selected_loop_id = created.loop_id
         self._config_bound_loop_id = None
+        if mode == "scheduled":
+            self.notify(f"scheduled loop saved: {created.loop_id}")
+            self.refresh_data()
+            return
         self._spawn_resume(created.loop_id)
         self.notify(f"loop started: {created.loop_id}")
         self.refresh_data()

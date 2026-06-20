@@ -2361,6 +2361,119 @@ def test_action_resume_selected_resets_control_to_run(tmp_path: Path) -> None:
     }
 
 
+def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = LoopService(tmp_path)
+
+    created: dict[str, str] = {}
+    app._spawn_resume = lambda loop_id: created.setdefault("spawned", loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: created.setdefault("message", message)  # type: ignore[method-assign]
+    app.refresh_data = lambda: created.setdefault("refreshed", "yes")  # type: ignore[method-assign]
+    app._config_mode_value = lambda: "scheduled"  # type: ignore[method-assign]
+    app._form_supports_run = lambda: True  # type: ignore[method-assign]
+    app._build_run_config_from_form = lambda state=None: LoopRunConfig(  # type: ignore[method-assign]
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    app._dashboard_form_values = lambda: {  # type: ignore[method-assign]
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "1",
+    }
+    app._workspace_form_values = lambda: {  # type: ignore[method-assign]
+        "root": str(tmp_path),
+        "include": "src/**",
+        "exclude": ".git/**",
+    }
+
+    app.action_run_loop()
+
+    loops = app.service.list_loops()
+    assert len(loops) == 1
+    assert loops[0].dashboard_config["mode"] == "scheduled"
+    assert created == {
+        "message": f"scheduled loop saved: {loops[0].loop_id}",
+        "refreshed": "yes",
+    }
+    assert "spawned" not in created
+
+
+def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-loop")
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "6"}
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app._schedule_countdown_text = lambda: "in 6 hours"  # type: ignore[method-assign]
+    app.query_one = lambda selector, *_args, **_kwargs: {  # type: ignore[method-assign]
+        "#safety-autonomy": type("S", (), {"value": "level-3"})(),
+        "#safety-branch-strategy": type("S", (), {"value": "current"})(),
+    }[selector]
+
+    text = app._loop_summary_text(state)
+
+    assert "Mode: Scheduled" in text
+    assert "Interval: every 6 hours" in text
+
+
+def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-config")
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "6"}
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    text = app._config_status_text(state)
+
+    assert "mode scheduled" in text
+    assert "schedule every 6 hours" in text
+
+
 def test_saved_dashboard_and_workspace_values_reload_into_forms(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
