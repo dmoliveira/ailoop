@@ -581,7 +581,7 @@ def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path:
             started_at=today,
             duration_seconds=120,
             success=True,
-            summary="Modified 6 files and prepared commit.",
+            summary="Modified 6 files and prepared commit. Token usage: 1200. Cost usage: $1.25.",
         ),
         IterationRecord(
             number=2,
@@ -603,8 +603,8 @@ def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path:
     assert "Average runtime: 2m 00s" in text
     assert "Files modified: 6" in text
     assert "Commits created: 1" in text
-    assert "Token usage: 0 tracked" in text
-    assert "Cost usage: $0 tracked" in text
+    assert "Token usage: 1200" in text
+    assert "Cost usage: $1.25" in text
 
 
 def test_render_sidebar_stats_shows_activity_counts() -> None:
@@ -626,9 +626,11 @@ def test_render_sidebar_stats_shows_activity_counts() -> None:
     sidebar = FakeStatic()
     app.query_one = lambda *_args, **_kwargs: sidebar  # type: ignore[method-assign]
 
-    app._render_sidebar_stats([FakeState("running"), FakeState("paused"), FakeState("idle")])
+    app._render_sidebar_stats(
+        [FakeState("running"), FakeState("paused"), FakeState("idle"), FakeState("failed")]
+    )
 
-    assert "visible 3 · active 3 · running 1 · paused 1" in sidebar.value
+    assert "visible 4 · active 3 · running 1 · paused 1 · fail 1" in sidebar.value
     assert "filter running · query review · selected reliability-" in sidebar.value
 
 
@@ -642,6 +644,7 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
         completed_iterations = 1
 
         class run_config:
+            agent = "orchestrator"
             steps = 5
             pause_seconds = 1800
 
@@ -654,6 +657,33 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
     assert "mode fixed" in text
     assert "next 30m" in text
     assert f"branch {app.current_branch}" in text
+    assert "agent orchestrato" in text
+
+
+def test_summary_selected_text_compacts_mode_and_next_run() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "scheduled-review"
+        status = "paused"
+        current_iteration = 0
+        completed_iterations = 2
+        dashboard_config = {"mode": "scheduled"}
+
+        class run_config:
+            agent = "orchestrator"
+            steps = 5
+            pause_seconds = 3600
+
+    app._schedule_countdown_text = lambda: "in 6 hours"  # type: ignore[method-assign]
+
+    text = app._summary_selected_text(FakeState(), width=80)
+
+    assert "sel scheduled-re" in text
+    assert "paused" in text
+    assert "iter 2/5" in text
+    assert "sched" in text
+    assert "next 6h" in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:

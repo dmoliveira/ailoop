@@ -235,6 +235,34 @@ def extract_commit_signal(summary: str | None) -> int:
     return 1 if re.search(r"\bcommit(?:ted|ting)?\b", summary, re.IGNORECASE) else 0
 
 
+def extract_token_usage(summary: str | None) -> int:
+    if not summary:
+        return 0
+    patterns = [
+        r"token(?:s| usage)?[:= ]+(\d+)",
+        r"(\d+)\s+tokens?",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, summary, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return 0
+
+
+def extract_cost_usage(summary: str | None) -> float:
+    if not summary:
+        return 0.0
+    patterns = [
+        r"cost(?: usage)?[:= ]+\$?(\d+(?:\.\d+)?)",
+        r"\$(\d+(?:\.\d+)?)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, summary, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+    return 0.0
+
+
 def colorize_log_line(line: str) -> str:
     if not line.strip():
         return line
@@ -1519,9 +1547,14 @@ class LoopDashboard(App[None]):
         running = sum(1 for state in states if state.status in RUNNING_STATUSES)
         active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
         paused = sum(1 for state in states if state.status == "paused")
+        failed = sum(1 for state in states if state.status == "failed")
         selected = short_loop_id(self.selected_loop_id) if self.selected_loop_id else "none"
+        counts_text = (
+            f"visible {len(states)} · active {active} · running {running} · paused {paused} · "
+            f"fail {failed}"
+        )
         sidebar_stats.update(
-            f"visible {len(states)} · active {active} · running {running} · paused {paused}\n"
+            f"{counts_text}\n"
             f"filter {self.filter_mode} · query {query} · selected {selected}"
         )
 
@@ -1578,6 +1611,7 @@ class LoopDashboard(App[None]):
         mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
         schedule_hint = compact_countdown_text(self._schedule_countdown_text())
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
+        mode_short = {"fixed": "fix", "infinite": "inf", "scheduled": "sched"}.get(mode, mode)
         iteration_text = (
             "iter "
             f"{loop_state.current_iteration or loop_state.completed_iterations}/"  # type: ignore[attr-defined]
@@ -1587,12 +1621,13 @@ class LoopDashboard(App[None]):
             return (
                 f"sel {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
                 f"{short_status(loop_state.status)} · "  # type: ignore[attr-defined]
-                f"{iteration_text}"
+                f"{iteration_text} · {mode_short} · {schedule_hint}"
             )
         return (
             f"selected {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
             f"{short_status(loop_state.status)} · {iteration_text} · "  # type: ignore[attr-defined]
-            f"mode {mode} · {schedule_hint} · branch {self.current_branch}"
+            f"mode {mode} · {schedule_hint} · branch {self.current_branch} · "
+            f"agent {(loop_state.run_config.agent or '-')[:12]}"  # type: ignore[attr-defined]
         )
 
     def _footer_base_text(self, width: int | None = None) -> str:
@@ -1920,6 +1955,8 @@ class LoopDashboard(App[None]):
         successful = sum(1 for item in iterations if item.success)
         modified_files = sum(extract_modified_files(item.summary) for item in iterations)
         commits_created = sum(extract_commit_signal(item.summary) for item in iterations)
+        token_usage = sum(extract_token_usage(item.summary) for item in iterations)
+        cost_usage = sum(extract_cost_usage(item.summary) for item in iterations)
         success_rate = int((successful / total_runs) * 100) if total_runs else 0
         avg_runtime = (
             sum((item.duration_seconds or 0) for item in iterations) / total_runs
@@ -1936,8 +1973,8 @@ class LoopDashboard(App[None]):
                 f"Average runtime: {format_duration(avg_runtime)}",
                 f"Files modified: {modified_files}",
                 f"Commits created: {commits_created}",
-                "Token usage: 0 tracked",
-                "Cost usage: $0 tracked",
+                f"Token usage: {token_usage}",
+                f"Cost usage: ${cost_usage:.2f}",
             ]
         )
 
