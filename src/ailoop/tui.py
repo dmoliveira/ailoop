@@ -98,6 +98,16 @@ def format_timestamp(value: str | None) -> str:
         return value
 
 
+def is_local_today(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        current_day = datetime.now().astimezone().date()
+        return datetime.fromisoformat(value).astimezone().date() == current_day
+    except ValueError:
+        return False
+
+
 def format_compact_timestamp(value: str | None) -> str:
     if not value:
         return "-"
@@ -208,6 +218,21 @@ def mini_bar(completed: int, total: int, width: int = 12) -> str:
     ratio = min(max(completed / total, 0), 1)
     filled = min(width, max(0, round(ratio * width)))
     return "█" * filled + "░" * (width - filled)
+
+
+def extract_modified_files(summary: str | None) -> int:
+    if not summary:
+        return 0
+    match = re.search(r"modified\s+(\d+)\s+files?", summary, re.IGNORECASE)
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def extract_commit_signal(summary: str | None) -> int:
+    if not summary:
+        return 0
+    return 1 if re.search(r"\bcommit(?:ted|ting)?\b", summary, re.IGNORECASE) else 0
 
 
 def colorize_log_line(line: str) -> str:
@@ -1491,8 +1516,13 @@ class LoopDashboard(App[None]):
         except Exception:
             return
         query = self.loop_query or "-"
+        running = sum(1 for state in states if state.status in RUNNING_STATUSES)
+        active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
+        paused = sum(1 for state in states if state.status == "paused")
+        selected = short_loop_id(self.selected_loop_id) if self.selected_loop_id else "none"
         sidebar_stats.update(
-            f"visible {len(states)} · filter {self.filter_mode} · query {query}"
+            f"visible {len(states)} · active {active} · running {running} · paused {paused}\n"
+            f"filter {self.filter_mode} · query {query} · selected {selected}"
         )
 
     def _summary_bar_text(
@@ -1883,9 +1913,13 @@ class LoopDashboard(App[None]):
 
     def _metrics_today_text(self) -> str:
         states = self.service.list_loops()
-        iterations = [item for state in states for item in state.iterations]
+        iterations = [
+            item for state in states for item in state.iterations if is_local_today(item.started_at)
+        ]
         total_runs = len(iterations)
         successful = sum(1 for item in iterations if item.success)
+        modified_files = sum(extract_modified_files(item.summary) for item in iterations)
+        commits_created = sum(extract_commit_signal(item.summary) for item in iterations)
         success_rate = int((successful / total_runs) * 100) if total_runs else 0
         avg_runtime = (
             sum((item.duration_seconds or 0) for item in iterations) / total_runs
@@ -1900,10 +1934,10 @@ class LoopDashboard(App[None]):
                 f"Runs: {total_runs}",
                 f"Success rate: {success_rate}%  {success_bar}",
                 f"Average runtime: {format_duration(avg_runtime)}",
-                "Files modified: not tracked",
-                "Commits created: not tracked",
-                "Token usage: not tracked",
-                "Cost usage: not tracked",
+                f"Files modified: {modified_files}",
+                f"Commits created: {commits_created}",
+                "Token usage: 0 tracked",
+                "Cost usage: $0 tracked",
             ]
         )
 

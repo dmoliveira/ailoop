@@ -1,10 +1,11 @@
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
 from ailoop.memory import MemoryStore
-from ailoop.models import LoopRunConfig
+from ailoop.models import IterationRecord, LoopRunConfig
 from ailoop.service import LoopService
 from ailoop.tui import LoopDashboard, launch_in_tmux, read_events, render_progress_text, tail_text
 
@@ -506,6 +507,86 @@ def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
     assert text == "all 0 · act 0 · run 0 · pause 0 · fail 0 · f running · stdout · sel none"
+
+
+def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=2,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="metrics-loop")
+
+    now = datetime.now(UTC)
+    today = now.isoformat()
+    yesterday = (now - timedelta(days=1)).isoformat()
+
+    state.iterations = [
+        IterationRecord(
+            number=1,
+            started_at=today,
+            duration_seconds=120,
+            success=True,
+            summary="Modified 6 files and prepared commit.",
+        ),
+        IterationRecord(
+            number=2,
+            started_at=yesterday,
+            duration_seconds=240,
+            success=False,
+            summary="Modified 2 files after validation failure.",
+        ),
+    ]
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    text = app._metrics_today_text()
+
+    assert "Runs: 1" in text
+    assert "Success rate: 100%" in text
+    assert "Average runtime: 2m 00s" in text
+    assert "Files modified: 6" in text
+    assert "Commits created: 1" in text
+    assert "Token usage: 0 tracked" in text
+    assert "Cost usage: $0 tracked" in text
+
+
+def test_render_sidebar_stats_shows_activity_counts() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.loop_query = "review"
+    app.selected_loop_id = "reliability-review"
+
+    class FakeState:
+        def __init__(self, status: str) -> None:
+            self.status = status
+
+    class FakeStatic:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def update(self, value: str) -> None:
+            self.value = value
+
+    sidebar = FakeStatic()
+    app.query_one = lambda *_args, **_kwargs: sidebar  # type: ignore[method-assign]
+
+    app._render_sidebar_stats([FakeState("running"), FakeState("paused"), FakeState("idle")])
+
+    assert "visible 3 · active 3 · running 1 · paused 1" in sidebar.value
+    assert "filter running · query review · selected reliability-" in sidebar.value
 
 
 def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
