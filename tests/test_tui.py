@@ -1,10 +1,12 @@
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from textual.widgets import DataTable
 
 from ailoop.memory import MemoryStore
-from ailoop.models import LoopRunConfig
+from ailoop.models import IterationRecord, LoopRunConfig
 from ailoop.service import LoopService
 from ailoop.tui import LoopDashboard, launch_in_tmux, read_events, render_progress_text, tail_text
 
@@ -98,6 +100,48 @@ def test_tui_mounts_and_loads_loop(tmp_path: Path) -> None:
             app.refresh_data()
             await pilot.pause()
             assert app.selected_loop_id == "tui1"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_loop_table_uses_iteration_and_mode_columns(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="table-loop")
+    state.status = "running"
+    state.current_iteration = 2
+    state.completed_iterations = 1
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            table = app.query_one(DataTable)
+            row = table.get_row("table-loop")
+            assert row[0] == "table-loop"
+            assert "running" in row[1]
+            assert row[2] == "2/5"
+            assert row[3] == "fixed"
+            assert row[4] == "orchestrator"
 
     import asyncio
 
@@ -463,7 +507,7 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.log_kind = "memory"
-    text = app._summary_bar_text(0, 0, 0, 0, 0, None)
+    text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None)
     assert f"memory all · labels 0 · selected {entry.id}" in text
     assert "log memory" not in text
     assert "current branch" not in text
@@ -496,16 +540,130 @@ def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.log_kind = "memory"
-    text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
-    assert "all 0 · act 0 · run 0 · pause 0 · fail 0" in text
+    text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
+    assert "L0 · A0 · R0 · P0 · S0 · F0" in text
     assert "f running" in text
     assert f"mem all · lab 0 · sel {entry.id[:8]}" in text
 
 
 def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
-    text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
-    assert text == "all 0 · act 0 · run 0 · pause 0 · fail 0 · f running · stdout · sel none"
+    text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
+    assert (
+        text
+        == "L0 · A0 · R0 · P0 · S0 · F0 · f running · view stdout · sel none"
+    )
+
+
+def test_footer_base_text_mentions_metrics_and_memory_shortcuts() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    assert app._footer_base_text(width=80) == "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q"
+    assert "logs 1-7/f/h/m/0" in app._footer_base_text(width=140)
+
+
+def test_log_toolbar_buttons_match_bound_shortcuts() -> None:
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.query_one("#log-metrics").label == "5 metrics"
+            assert app.query_one("#log-history").label == "6 history"
+            assert app.query_one("#log-memory").label == "7 memory"
+            assert app.query_one("#log-memory-favorites").label == "f favorites"
+            assert app.query_one("#log-memory-history").label == "h mem-history"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=2,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="metrics-loop")
+
+    now = datetime.now(UTC)
+    today = now.isoformat()
+    yesterday = (now - timedelta(days=1)).isoformat()
+
+    state.iterations = [
+        IterationRecord(
+            number=1,
+            started_at=today,
+            duration_seconds=120,
+            success=True,
+            summary="Modified 6 files and prepared commit. Token usage: 1200. Cost usage: $1.25.",
+        ),
+        IterationRecord(
+            number=2,
+            started_at=yesterday,
+            duration_seconds=240,
+            success=False,
+            summary="Modified 2 files after validation failure.",
+        ),
+    ]
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    text = app._metrics_today_text()
+
+    assert "Runs: 1" in text
+    assert "Success rate: 100%" in text
+    assert "Average runtime: 2m 00s" in text
+    assert "Files modified: 6" in text
+    assert "Commits created: 1" in text
+    assert "Token usage: 1200" in text
+    assert "Cost usage: $1.25" in text
+
+
+def test_render_sidebar_stats_shows_activity_counts() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.loop_query = "review"
+    app.selected_loop_id = "reliability-review"
+
+    class FakeState:
+        def __init__(self, status: str) -> None:
+            self.status = status
+
+            class run_config:
+                steps = 1
+                pause_seconds = 0
+
+            self.run_config = run_config()
+
+    class FakeStatic:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def update(self, value: str) -> None:
+            self.value = value
+
+    sidebar = FakeStatic()
+    app.query_one = lambda *_args, **_kwargs: sidebar  # type: ignore[method-assign]
+
+    app._render_sidebar_stats(
+        [FakeState("running"), FakeState("paused"), FakeState("idle"), FakeState("failed")]
+    )
+
+    assert "loops 4 · active 3 · running 1 · paused 1 · scheduled 0 · failed 1" in sidebar.value
+    assert "filter running · query review · selected reliability-" in sidebar.value
 
 
 def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
@@ -518,16 +676,117 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
         completed_iterations = 1
 
         class run_config:
+            agent = "orchestrator"
             steps = 5
+            pause_seconds = 1800
 
     app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
 
     text = app._summary_selected_text(FakeState(), width=140)
 
     assert "selected reliability-" in text
+    assert "state running" in text
     assert "iter 2/5" in text
+    assert "mode fixed" in text
     assert "next 30m" in text
-    assert "current branch" not in text
+    assert f"branch {app.current_branch}" in text
+    assert "agent orchestrato" in text
+
+
+def test_summary_selected_text_compacts_mode_and_next_run() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "scheduled-review"
+        status = "paused"
+        current_iteration = 0
+        completed_iterations = 2
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+        }
+
+        class run_config:
+            agent = "orchestrator"
+            steps = 5
+            pause_seconds = 3600
+
+    app._schedule_countdown_text = lambda: "in 6 hours"  # type: ignore[method-assign]
+
+    text = app._summary_selected_text(FakeState(), width=80)
+
+    assert "sel scheduled-re" in text
+    assert "paused" in text
+    assert "iter 2/5" in text
+    assert "sched" in text
+    assert "next 6h" in text
+
+
+def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "selected-scheduled"
+        status = "paused"
+        current_iteration = 0
+        completed_iterations = 1
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+            "schedule_start": "09:30",
+        }
+
+        class run_config:
+            agent = "orchestrator"
+            steps = 5
+            pause_seconds = 60
+
+    app._schedule_countdown_text = lambda: "in 1 minutes"  # type: ignore[method-assign]
+
+    text = app._summary_selected_text(FakeState(), width=140)
+
+    assert "next 6h" in text
+    assert "next 1m" not in text
+
+
+def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "selected-scheduled"
+        status = "idle"
+        completed_iterations = 0
+        current_iteration = 0
+        created_at = "2026-05-16T10:40:01+00:00"
+        updated_at = "2026-05-16T10:45:01+00:00"
+        average_duration_seconds = 0
+        last_summary = None
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+            "schedule_start": "09:30",
+        }
+
+        class run_config:
+            runner = "echo"
+            agent = "orchestrator"
+            steps = None
+            pause_seconds = 60
+
+    app._schedule_countdown_text = lambda: "in 1 minutes"  # type: ignore[method-assign]
+    app.query_one = lambda selector, *_args, **_kwargs: {  # type: ignore[method-assign]
+        "#safety-autonomy": type("S", (), {"value": "level-3"})(),
+        "#workspace-branch-strategy": type("S", (), {"value": "current"})(),
+    }[selector]
+
+    text = app._loop_summary_text(FakeState())
+
+    assert "Mode: Scheduled" in text
+    assert "Next: in 6 hours" in text
+    assert "Next: in 1 minutes" not in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
@@ -558,7 +817,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=120)
-    assert "logs 1-7/m/0" in text
+    assert "logs 1-7/f/h/m/0" in text
     assert "all" in text
     assert "1" in text
     assert "0/0" in text
@@ -597,7 +856,7 @@ def test_memory_help_text_uses_compact_footer_at_80_columns(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=80)
-    assert "↑↓ filt g/a/l · 1-7/m/0 · r/q" in text
+    assert "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q" in text
     assert "mem:all" in text
     assert "cwd" in text
     assert "ent:1" in text
@@ -2099,7 +2358,7 @@ def test_config_status_text_distinguishes_draft_from_selected_loop(tmp_path: Pat
     assert "Draft config" in app._config_status_text(None)
     selected_text = app._config_status_text(state)
     assert "Editing loop cfg-loop" in selected_text
-    assert "schedule every 30 minutes" in selected_text
+    assert "schedule every 1 minutes" in selected_text
 
 
 def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
@@ -2125,7 +2384,7 @@ def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
         "#workspace-root": FakeInput("/tmp/workspace"),
         "#workspace-include": FakeTextArea("src/**\ntests/**"),
         "#workspace-exclude": FakeTextArea(".git/**\nnode_modules/**\ndist/**"),
-        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#workspace-branch-strategy": FakeSelect("per-iteration"),
         "#schedule-type": FakeSelect("minutes"),
         "#config-interval": FakeSelect("minutes"),
         "#schedule-every": FakeInput("45"),
@@ -2169,8 +2428,8 @@ def test_iteration_progress_text_uses_current_iteration_while_running(tmp_path: 
 
     text = app._iteration_progress_text(state)
 
-    assert "Current iteration: 2 / 5" in text
-    assert "Progress bar: █████░░░░░░░ 2/5" in text
+    assert "Iter: 2 / 5" in text
+    assert "Bar: █████░░░░░░░ 2/5" in text
     assert "1/5" not in text
 
 
@@ -2203,6 +2462,20 @@ def test_schedule_card_text_uses_selected_schedule_type_not_loop_mode() -> None:
     assert "Schedule type: fixed" not in text
 
 
+def test_right_rail_previews_are_visible_after_render() -> None:
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert not app.query_one("#schedule-preview").has_class("detail-preview-hidden")
+            assert not app.query_one("#safety-preview").has_class("detail-preview-hidden")
+            assert not app.query_one("#notifications-preview").has_class("detail-preview-hidden")
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_actions_status_text_summarizes_available_controls(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -2233,6 +2506,437 @@ def test_actions_status_text_summarizes_available_controls(tmp_path: Path) -> No
     assert "next blocked" in text
 
 
+def test_actions_status_text_marks_next_iteration_ready_when_loop_can_step(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="step-loop")
+    state.status = "paused"
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    text = app._actions_status_text(state)
+
+    assert text.startswith("step-loop · paused")
+    assert "continue ready" in text
+    assert "next ready" in text
+
+
+def test_action_next_iteration_requests_single_step_and_resume(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="step-action")
+    state.status = "paused"
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+
+    seen: dict[str, str] = {}
+    app._spawn_resume = lambda loop_id: seen.setdefault("loop_id", loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: seen.setdefault("message", message)  # type: ignore[method-assign]
+    app.refresh_data = lambda: seen.setdefault("refreshed", "yes")  # type: ignore[method-assign]
+
+    app.action_next_iteration()
+
+    updated = service.load_loop(state.loop_id)
+    assert updated.pending_single_iteration is True
+    assert updated.control == "run"
+    assert seen == {
+        "loop_id": state.loop_id,
+        "message": f"next iteration queued: {state.loop_id}",
+        "refreshed": "yes",
+    }
+
+
+def test_action_resume_selected_resets_control_to_run(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="resume-action")
+    state.status = "paused"
+    state.control = "pause"
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+
+    seen: dict[str, str] = {}
+    app._spawn_resume = lambda loop_id: seen.setdefault("loop_id", loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: seen.setdefault("message", message)  # type: ignore[method-assign]
+    app.refresh_data = lambda: seen.setdefault("refreshed", "yes")  # type: ignore[method-assign]
+
+    app.action_resume_selected()
+
+    updated = service.load_loop(state.loop_id)
+    assert updated.control == "run"
+    assert seen == {
+        "loop_id": state.loop_id,
+        "message": f"resume sent: {state.loop_id}",
+        "refreshed": "yes",
+    }
+
+
+def test_action_resume_selected_blocks_scheduled_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="resume-scheduled")
+    state.status = "idle"
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+
+    seen: dict[str, str] = {}
+    app._spawn_resume = lambda loop_id: seen.setdefault("loop_id", loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: seen.setdefault("message", message)  # type: ignore[method-assign]
+
+    app.action_resume_selected()
+
+    updated = service.load_loop(state.loop_id)
+    assert updated.control == "run"
+    assert seen == {"message": "scheduled loops wait for their configured run window"}
+
+
+def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = LoopService(tmp_path)
+
+    created: dict[str, str] = {}
+    app._spawn_resume = lambda loop_id: created.setdefault("spawned", loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: created.setdefault("message", message)  # type: ignore[method-assign]
+    app.refresh_data = lambda: created.setdefault("refreshed", "yes")  # type: ignore[method-assign]
+    app._config_mode_value = lambda: "scheduled"  # type: ignore[method-assign]
+    app._form_supports_run = lambda: True  # type: ignore[method-assign]
+    app._build_run_config_from_form = lambda state=None: LoopRunConfig(  # type: ignore[method-assign]
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    app._dashboard_form_values = lambda: {  # type: ignore[method-assign]
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "1",
+    }
+    app._workspace_form_values = lambda: {  # type: ignore[method-assign]
+        "root": str(tmp_path),
+        "include": "src/**",
+        "exclude": ".git/**",
+    }
+
+    app.action_run_loop()
+
+    loops = app.service.list_loops()
+    assert len(loops) == 1
+    assert loops[0].dashboard_config["mode"] == "scheduled"
+    assert created == {
+        "message": f"scheduled loop saved: {loops[0].loop_id}",
+        "refreshed": "yes",
+    }
+    assert "spawned" not in created
+
+
+def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-loop")
+    state.dashboard_config = {
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "6",
+        "autonomy": "level-4",
+        "branch_strategy": "per-iteration",
+    }
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app._schedule_countdown_text = lambda: "in 6 hours"  # type: ignore[method-assign]
+    app.query_one = lambda selector, *_args, **_kwargs: {  # type: ignore[method-assign]
+        "#safety-autonomy": type("S", (), {"value": "level-3"})(),
+        "#workspace-branch-strategy": type("S", (), {"value": "current"})(),
+    }[selector]
+
+    text = app._loop_summary_text(state)
+
+    assert "Mode: Scheduled" in text
+    assert "Mode: Scheduled · every 6 hours" in text
+    assert "Next: in 6 hours · branch per iteration · Level 4 Edit + Commit" in text
+
+
+def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-config")
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "6"}
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    text = app._config_status_text(state)
+
+    assert "mode scheduled" in text
+    assert "schedule every 6 hours" in text
+
+
+def test_saved_scheduled_loop_reloads_scheduled_mode_into_form(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-form")
+    state.dashboard_config = {
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "6",
+        "schedule_start": "09:30",
+        "schedule_timezone": "utc",
+    }
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert app.query_one("#config-mode").value == "scheduled"
+            assert app.query_one("#schedule-type").value == "hours"
+            assert app.query_one("#schedule-every").value == "6"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_saved_dashboard_and_workspace_values_reload_into_forms(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="saved prompt",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="saved-forms")
+    state.dashboard_config = {
+        "quiet_hours": True,
+        "quiet_start": "21:00",
+        "quiet_end": "06:00",
+        "jitter": True,
+        "jitter_value": "1-3",
+        "schedule_type": "hours",
+        "schedule_every": "6",
+        "schedule_start": "09:30",
+        "schedule_timezone": "utc",
+        "autonomy": "level-4",
+        "branch_strategy": "per-iteration",
+        "notify_slack": True,
+    }
+    state.workspace_config = {
+        "root": str(tmp_path / "workspace"),
+        "include": "src/**\ndocs/**",
+        "exclude": ".git/**\ndist/**",
+    }
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert app.query_one("#config-quiet-hours").value is True
+            assert app.query_one("#config-quiet-start").value == "21:00"
+            assert app.query_one("#config-quiet-end").value == "06:00"
+            assert app.query_one("#config-jitter").value is True
+            assert app.query_one("#config-jitter-value").value == "1-3"
+            assert app.query_one("#schedule-type").value == "minutes"
+            assert app.query_one("#schedule-every").value == "1"
+            assert app.query_one("#schedule-start-time").value == "09:30"
+            assert app.query_one("#schedule-timezone").value == "utc"
+            assert app.query_one("#safety-autonomy").value == "level-4"
+            assert app.query_one("#workspace-branch-strategy").value == "per-iteration"
+            assert app.query_one("#notify-slack").value is True
+            assert app.query_one("#workspace-root").value == str(tmp_path / "workspace")
+            assert str(app.query_one("#workspace-current-branch").render()) == app.current_branch
+            assert app.query_one("#workspace-include").text == "src/**\ndocs/**"
+            assert app.query_one("#workspace-exclude").text == ".git/**\ndist/**"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_restart_actions_clear_pending_single_iteration(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="restart-step")
+    state.status = "paused"
+    state.pending_single_iteration = True
+    service.store.save(state)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+    app._build_run_config_from_form = lambda current_state=None: (  # type: ignore[method-assign]
+        current_state.run_config if current_state is not None else run_config
+    )
+    app._dashboard_form_values = lambda: {}  # type: ignore[method-assign]
+    app._workspace_form_values = lambda: {}  # type: ignore[method-assign]
+    app._spawn_resume = lambda _loop_id: None  # type: ignore[method-assign]
+    app.notify = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+
+    app.action_restart_selected()
+    restarted = service.load_loop(state.loop_id)
+    assert restarted.pending_single_iteration is False
+
+    restarted.pending_single_iteration = True
+    service.store.save(restarted)
+    app.action_restart_reset_selected()
+    reset = service.load_loop(state.loop_id)
+    assert reset.pending_single_iteration is False
+
+
 def test_safety_card_text_compacts_preview_summary() -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
 
@@ -2250,7 +2954,7 @@ def test_safety_card_text_compacts_preview_summary() -> None:
 
     widgets = {
         "#safety-autonomy": FakeSelect("level-4"),
-        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#workspace-branch-strategy": FakeSelect("per-iteration"),
         "#safety-ask-before-commit": FakeCheckbox(True),
         "#safety-ask-before-push": FakeCheckbox(False),
         "#safety-auto-commit": FakeCheckbox(True),
@@ -2321,7 +3025,7 @@ def test_ops_snapshot_text_compacts_to_two_summary_lines() -> None:
         "#schedule-start-time": FakeInput("Now"),
         "#schedule-timezone": FakeSelect("local"),
         "#safety-autonomy": FakeSelect("level-3"),
-        "#safety-branch-strategy": FakeSelect("current"),
+        "#workspace-branch-strategy": FakeSelect("current"),
         "#safety-ask-before-commit": FakeCheckbox(True),
         "#safety-ask-before-push": FakeCheckbox(True),
         "#safety-auto-commit": FakeCheckbox(False),
@@ -2380,14 +3084,16 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
 
     text = app._loop_summary_text(state)
 
-    assert "Branch/Autonomy: current branch · Level 3 Edit" in text
+    assert "Loop: summary-loop ·" in text
+    assert "Mode: Fixed Count · every 1 minutes" in text
+    assert "Next: in 30 minutes · current branch · Level 3 Edit" in text
     assert "Runner/Agent: echo · orchestrator" in text
     assert "Updated/Avg:" in text
-    assert "Branch strategy:" not in text
-    assert "\nAutonomy:" not in text
-    assert "\nRunner:" not in text
-    assert "\nAgent:" not in text
-    assert "Avg runtime:" not in text
+    assert "Last: Modified 6 files and passing tests." in text
+    assert "Name:" not in text
+    assert "State:" not in text
+    assert "Interval:" not in text
+    assert "Next run:" not in text
 
 
 def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path: Path) -> None:
@@ -2435,8 +3141,8 @@ def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path:
 
     text = app._iteration_history_card_text(state)
 
-    assert "#2 Running" in text
-    assert "#2 Failed" not in text
-    assert "#2 Running · " in text
+    assert "#2 Run" in text
+    assert "#2 Fail" not in text
+    assert "#2 Run · " in text
     assert ":40 · 8m 00s" in text
     assert "2026-05-16" not in text

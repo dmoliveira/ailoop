@@ -81,6 +81,18 @@ class LoopService:
         self.store.append_event(loop_id, {"at": utc_now(), "event": "control", "control": control})
         return state
 
+    def request_single_iteration(self, loop_id: str) -> LoopState:
+        state = self.store.load(loop_id)
+        if state.status in {"running", "pause_requested", "stop_requested"}:
+            raise RuntimeError(f"Loop is already active: {loop_id}")
+        if not self.should_continue(state):
+            raise RuntimeError(f"Loop has no pending iterations: {loop_id}")
+        state.control = "run"
+        state.pending_single_iteration = True
+        self.store.save(state)
+        self.store.append_event(loop_id, {"at": utc_now(), "event": "single_iteration_requested"})
+        return state
+
     def should_continue(self, state: LoopState) -> bool:
         target = state.run_config.steps
         if state.control == "stop":
@@ -100,9 +112,28 @@ class LoopService:
         with self.store.acquire_lock(loop_id):
             state = self.store.load(loop_id)
             self._validate_task_file(state)
-            state.control = "run"
+            if state.control == "stop":
+                state.status = "stopped"
+                state.updated_at = utc_now()
+                self.store.save(state)
+                self.store.append_event(loop_id, {"at": utc_now(), "event": "stopped"})
+                return state
+            if state.control == "pause":
+                state.status = "paused"
+                state.updated_at = utc_now()
+                self.store.save(state)
+                self.store.append_event(loop_id, {"at": utc_now(), "event": "paused"})
+                return state
+            if getattr(state, "dashboard_config", {}).get("mode") == "scheduled":
+                state.status = "idle"
+                state.updated_at = utc_now()
+                self.store.save(state)
+                self.store.append_event(loop_id, {"at": utc_now(), "event": "scheduled_waiting"})
+                return state
+            if state.control not in {"pause", "stop"}:
+                state.control = "run"
             self.store.save(state)
-            while self.should_continue(state):
+            while self.should_continue(state) or state.pending_single_iteration:
                 state = self.store.load(loop_id)
                 if state.control == "pause":
                     state.status = "paused"
@@ -114,6 +145,7 @@ class LoopService:
                     self.store.save(state)
                     self.store.append_event(loop_id, {"at": utc_now(), "event": "stopped"})
                     return state
+                single_iteration_requested = state.pending_single_iteration
                 state = self._run_iteration(state)
                 state = self.store.load(loop_id)
                 if state.control == "pause":
@@ -126,9 +158,24 @@ class LoopService:
                     self.store.save(state)
                     self.store.append_event(loop_id, {"at": utc_now(), "event": "stopped"})
                     return state
+                if state.pending_single_iteration:
+                    state.pending_single_iteration = False
+                    self.store.save(state)
                 if state.last_exit_code not in (0, None) and not state.run_config.continue_on_error:
                     state.status = "failed"
                     self.store.save(state)
+                    return state
+                if single_iteration_requested and self.should_continue(state):
+                    state.status = "paused"
+                    self.store.save(state)
+                    self.store.append_event(
+                        loop_id,
+                        {
+                            "at": utc_now(),
+                            "event": "single_iteration_completed",
+                            "iteration": state.current_iteration,
+                        },
+                    )
                     return state
                 if self.should_continue(state):
                     time.sleep(state.run_config.pause_seconds)
