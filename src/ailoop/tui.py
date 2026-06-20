@@ -905,6 +905,7 @@ class LoopDashboard(App[None]):
                 yield Static(id="iteration_progress", classes="card-static")
                 yield Static(id="iteration_history", classes="card-static")
                 yield Static(id="ops_snapshot", classes="card-static")
+                yield Static(id="metrics_today", classes="card-static")
                 with Vertical(id="schedule_card", classes="right-card"):
                     yield Static("SCHEDULING", classes="panel-title")
                     yield Static(id="schedule-preview", classes="mini-note detail-preview-hidden")
@@ -1032,7 +1033,6 @@ class LoopDashboard(App[None]):
                         with Vertical(classes="field-group"):
                             yield Static("Max cost", classes="section-title")
                             yield Input(str(defaults["max_cost"]), id="safety-max-cost")
-                yield Static(id="metrics_today", classes="card-static")
                 with Vertical(id="notifications_card", classes="right-card"):
                     yield Static("NOTIFICATIONS", classes="panel-title")
                     yield Static(
