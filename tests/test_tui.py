@@ -766,7 +766,7 @@ def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults
             steps = 5
             pause_seconds = 60
 
-    app._schedule_countdown_text = lambda: "in 1 minutes"  # type: ignore[method-assign]
+    app._schedule_countdown_text = lambda: "in 1 minute"  # type: ignore[method-assign]
 
     text = app._summary_selected_text(FakeState(), width=140)
 
@@ -799,7 +799,7 @@ def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
             steps = None
             pause_seconds = 60
 
-    app._schedule_countdown_text = lambda: "in 1 minutes"  # type: ignore[method-assign]
+    app._schedule_countdown_text = lambda: "in 1 minute"  # type: ignore[method-assign]
     app.query_one = lambda selector, *_args, **_kwargs: {  # type: ignore[method-assign]
         "#safety-autonomy": type("S", (), {"value": "level-3"})(),
         "#workspace-branch-strategy": type("S", (), {"value": "current"})(),
@@ -809,7 +809,7 @@ def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
 
     assert "Mode: Scheduled" in text
     assert "Next: in 6 hours" in text
-    assert "Next: in 1 minutes" not in text
+    assert "Next: in 1 minute" not in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
@@ -2381,7 +2381,7 @@ def test_config_status_text_distinguishes_draft_from_selected_loop(tmp_path: Pat
     assert "Draft config" in app._config_status_text(None)
     selected_text = app._config_status_text(state)
     assert "Editing loop cfg-loop" in selected_text
-    assert "schedule every 1 minutes" in selected_text
+    assert "schedule every 1 minute" in selected_text
 
 
 def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
@@ -2483,6 +2483,31 @@ def test_schedule_card_text_uses_selected_schedule_type_not_loop_mode() -> None:
     assert "every 6" in text
     assert "next 6h" in text
     assert "Schedule type: fixed" not in text
+
+
+def test_schedule_card_text_compacts_singular_countdown_units() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#schedule-type": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("1"),
+        "#schedule-start-time": FakeInput("09:30"),
+        "#schedule-timezone": FakeSelect("local"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._schedule_card_text(None)
+
+    assert "every 1" in text
+    assert "next 1m" in text
 
 
 def test_schedule_card_text_prefers_selected_loop_schedule_over_form_defaults() -> None:
@@ -3183,7 +3208,7 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     text = app._loop_summary_text(state)
 
     assert "Loop: summary-loop ·" in text
-    assert "Mode: Fixed Count · every 1 minutes" in text
+    assert "Mode: Fixed Count · every 1 minute" in text
     assert "Next: in 30 minutes · current branch · Level 3 Edit" in text
     assert "Runner/Agent: echo · orchestrator" in text
     assert "Updated/Avg:" in text
