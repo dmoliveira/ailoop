@@ -1552,6 +1552,9 @@ class LoopDashboard(App[None]):
         running = sum(1 for state in states if state.status in RUNNING_STATUSES)
         paused = sum(1 for state in states if state.status == "paused")
         failed = sum(1 for state in states if state.status == "failed")
+        scheduled = sum(
+            1 for state in states if self._state_mode_and_schedule(state)[0] == "scheduled"
+        )
         selected = self._selected_state()
         summary_text = self._summary_bar_text(
             total,
@@ -1559,6 +1562,7 @@ class LoopDashboard(App[None]):
             running,
             paused,
             failed,
+            scheduled,
             selected,
             width=self.size.width,
         )
@@ -1577,10 +1581,13 @@ class LoopDashboard(App[None]):
         active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
         paused = sum(1 for state in states if state.status == "paused")
         failed = sum(1 for state in states if state.status == "failed")
+        scheduled = sum(
+            1 for state in states if self._state_mode_and_schedule(state)[0] == "scheduled"
+        )
         selected = short_loop_id(self.selected_loop_id) if self.selected_loop_id else "none"
         counts_text = (
             f"visible {len(states)} · active {active} · running {running} · paused {paused} · "
-            f"fail {failed}"
+            f"sched {scheduled} · fail {failed}"
         )
         sidebar_stats.update(
             f"{counts_text}\n"
@@ -1594,6 +1601,7 @@ class LoopDashboard(App[None]):
         running: int,
         paused: int,
         failed: int,
+        scheduled: int,
         state: object | None,
         width: int | None = None,
     ) -> str:
@@ -1601,11 +1609,14 @@ class LoopDashboard(App[None]):
         compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         selected_text = self._summary_selected_text(state, width=actual_width)
         if compact:
-            base = f"all {total} · act {active} · run {running} · pause {paused} · fail {failed}"
+            base = (
+                f"all {total} · act {active} · run {running} · pause {paused} · "
+                f"sch {scheduled} · fail {failed}"
+            )
         else:
             base = (
                 f"all {total} · active {active} · running {running} · paused {paused} · "
-                f"failed {failed}"
+                f"scheduled {scheduled} · failed {failed}"
             )
         if self.log_kind == "memory":
             if compact:

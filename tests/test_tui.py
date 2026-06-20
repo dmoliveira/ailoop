@@ -507,7 +507,7 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.log_kind = "memory"
-    text = app._summary_bar_text(0, 0, 0, 0, 0, None)
+    text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None)
     assert f"memory all · labels 0 · selected {entry.id}" in text
     assert "log memory" not in text
     assert "current branch" not in text
@@ -540,16 +540,19 @@ def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
     app.log_kind = "memory"
-    text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
-    assert "all 0 · act 0 · run 0 · pause 0 · fail 0" in text
+    text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
+    assert "all 0 · act 0 · run 0 · pause 0 · sch 0 · fail 0" in text
     assert "f running" in text
     assert f"mem all · lab 0 · sel {entry.id[:8]}" in text
 
 
 def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
-    text = app._summary_bar_text(0, 0, 0, 0, 0, None, width=80)
-    assert text == "all 0 · act 0 · run 0 · pause 0 · fail 0 · f running · stdout · sel none"
+    text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
+    assert (
+        text
+        == "all 0 · act 0 · run 0 · pause 0 · sch 0 · fail 0 · f running · stdout · sel none"
+    )
 
 
 def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path: Path) -> None:
@@ -616,6 +619,12 @@ def test_render_sidebar_stats_shows_activity_counts() -> None:
         def __init__(self, status: str) -> None:
             self.status = status
 
+            class run_config:
+                steps = 1
+                pause_seconds = 0
+
+            self.run_config = run_config()
+
     class FakeStatic:
         def __init__(self) -> None:
             self.value = ""
@@ -630,7 +639,7 @@ def test_render_sidebar_stats_shows_activity_counts() -> None:
         [FakeState("running"), FakeState("paused"), FakeState("idle"), FakeState("failed")]
     )
 
-    assert "visible 4 · active 3 · running 1 · paused 1 · fail 1" in sidebar.value
+    assert "visible 4 · active 3 · running 1 · paused 1 · sched 0 · fail 1" in sidebar.value
     assert "filter running · query review · selected reliability-" in sidebar.value
 
 
