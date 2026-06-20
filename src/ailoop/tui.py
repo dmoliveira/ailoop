@@ -1545,6 +1545,7 @@ class LoopDashboard(App[None]):
                 return "sel none"
             return "selected none"
         loop_state = state
+        mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
         schedule_hint = compact_countdown_text(self._schedule_countdown_text())
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
         iteration_text = (
@@ -1561,7 +1562,7 @@ class LoopDashboard(App[None]):
         return (
             f"selected {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
             f"{short_status(loop_state.status)} · {iteration_text} · "  # type: ignore[attr-defined]
-            f"{schedule_hint}"
+            f"mode {mode} · {schedule_hint} · branch {self.current_branch}"
         )
 
     def _footer_base_text(self, width: int | None = None) -> str:

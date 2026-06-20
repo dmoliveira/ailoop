@@ -519,6 +519,7 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
 
         class run_config:
             steps = 5
+            pause_seconds = 1800
 
     app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
 
@@ -526,8 +527,9 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
 
     assert "selected reliability-" in text
     assert "iter 2/5" in text
+    assert "mode fixed" in text
     assert "next 30m" in text
-    assert "current branch" not in text
+    assert f"branch {app.current_branch}" in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
