@@ -541,7 +541,7 @@ def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
     app.memory = memory
     app.log_kind = "memory"
     text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
-    assert "all 0 · act 0 · run 0 · pause 0 · sch 0 · fail 0" in text
+    assert "L0 · A0 · R0 · P0 · S0 · F0" in text
     assert "f running" in text
     assert f"mem all · lab 0 · sel {entry.id[:8]}" in text
 
@@ -551,8 +551,31 @@ def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
     assert (
         text
-        == "all 0 · act 0 · run 0 · pause 0 · sch 0 · fail 0 · f running · stdout · sel none"
+        == "L0 · A0 · R0 · P0 · S0 · F0 · f running · view stdout · sel none"
     )
+
+
+def test_footer_base_text_mentions_metrics_and_memory_shortcuts() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    assert app._footer_base_text(width=80) == "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q"
+    assert "logs 1-7/f/h/m/0" in app._footer_base_text(width=140)
+
+
+def test_log_toolbar_buttons_match_bound_shortcuts() -> None:
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.query_one("#log-metrics").label == "5 metrics"
+            assert app.query_one("#log-history").label == "6 history"
+            assert app.query_one("#log-memory").label == "7 memory"
+            assert app.query_one("#log-memory-favorites").label == "f favorites"
+            assert app.query_one("#log-memory-history").label == "h mem-history"
+
+    import asyncio
+
+    asyncio.run(run_test())
 
 
 def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path: Path) -> None:
@@ -639,7 +662,7 @@ def test_render_sidebar_stats_shows_activity_counts() -> None:
         [FakeState("running"), FakeState("paused"), FakeState("idle"), FakeState("failed")]
     )
 
-    assert "visible 4 · active 3 · running 1 · paused 1 · sched 0 · fail 1" in sidebar.value
+    assert "loops 4 · active 3 · running 1 · paused 1 · scheduled 0 · failed 1" in sidebar.value
     assert "filter running · query review · selected reliability-" in sidebar.value
 
 
@@ -662,6 +685,7 @@ def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
     text = app._summary_selected_text(FakeState(), width=140)
 
     assert "selected reliability-" in text
+    assert "state running" in text
     assert "iter 2/5" in text
     assert "mode fixed" in text
     assert "next 30m" in text
@@ -793,7 +817,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=120)
-    assert "logs 1-7/m/0" in text
+    assert "logs 1-7/f/h/m/0" in text
     assert "all" in text
     assert "1" in text
     assert "0/0" in text
@@ -832,7 +856,7 @@ def test_memory_help_text_uses_compact_footer_at_80_columns(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=80)
-    assert "↑↓ filt g/a/l · 1-7/m/0 · r/q" in text
+    assert "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q" in text
     assert "mem:all" in text
     assert "cwd" in text
     assert "ent:1" in text

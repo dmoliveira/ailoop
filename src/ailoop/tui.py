@@ -669,9 +669,11 @@ class LoopDashboard(App[None]):
         ("2", "set_log_stderr", "Stderr"),
         ("3", "set_log_prompt", "Prompt"),
         ("4", "set_log_events", "Events"),
-        ("5", "set_log_memory", "Memory"),
-        ("6", "set_log_memory_favorites", "Favorites"),
-        ("7", "set_log_memory_history", "History"),
+        ("5", "set_log_metrics", "Metrics"),
+        ("6", "set_log_history", "History"),
+        ("7", "set_log_memory", "Memory"),
+        ("f", "set_log_memory_favorites", "Favorites"),
+        ("h", "set_log_memory_history", "History"),
         ("m", "set_log_memory_presets", "Presets"),
         ("0", "set_log_memory_archived", "Archived"),
         ("b", "memory_label_prev", "Prev Label"),
@@ -1586,8 +1588,8 @@ class LoopDashboard(App[None]):
         )
         selected = short_loop_id(self.selected_loop_id) if self.selected_loop_id else "none"
         counts_text = (
-            f"visible {len(states)} · active {active} · running {running} · paused {paused} · "
-            f"sched {scheduled} · fail {failed}"
+            f"loops {len(states)} · active {active} · running {running} · paused {paused} · "
+            f"scheduled {scheduled} · failed {failed}"
         )
         sidebar_stats.update(
             f"{counts_text}\n"
@@ -1610,12 +1612,11 @@ class LoopDashboard(App[None]):
         selected_text = self._summary_selected_text(state, width=actual_width)
         if compact:
             base = (
-                f"all {total} · act {active} · run {running} · pause {paused} · "
-                f"sch {scheduled} · fail {failed}"
+                f"L{total} · A{active} · R{running} · P{paused} · S{scheduled} · F{failed}"
             )
         else:
             base = (
-                f"all {total} · active {active} · running {running} · paused {paused} · "
+                f"loops {total} · active {active} · running {running} · paused {paused} · "
                 f"scheduled {scheduled} · failed {failed}"
             )
         if self.log_kind == "memory":
@@ -1623,8 +1624,8 @@ class LoopDashboard(App[None]):
                 return f"{base} · f {self.filter_mode} · {selected_text}"
             return f"{base} · filter {self.filter_mode} · {selected_text}"
         if compact:
-            return f"{base} · f {self.filter_mode} · {self.log_kind} · {selected_text}"
-        return f"{base} · filter {self.filter_mode} · {self.log_kind} · {selected_text}"
+            return f"{base} · f {self.filter_mode} · view {self.log_kind} · {selected_text}"
+        return f"{base} · filter {self.filter_mode} · view {self.log_kind} · {selected_text}"
 
     def _summary_selected_text(self, state: object | None, width: int | None = None) -> str:
         actual_width = width or 0
@@ -1665,7 +1666,7 @@ class LoopDashboard(App[None]):
             )
         return (
             f"selected {short_loop_id(loop_state.loop_id)} · "  # type: ignore[attr-defined]
-            f"{short_status(loop_state.status)} · {iteration_text} · "  # type: ignore[attr-defined]
+            f"state {short_status(loop_state.status)} · {iteration_text} · "  # type: ignore[attr-defined]
             f"mode {mode} · {schedule_hint} · branch {self.current_branch} · "
             f"agent {(loop_state.run_config.agent or '-')[:12]}"  # type: ignore[attr-defined]
         )
@@ -1673,8 +1674,8 @@ class LoopDashboard(App[None]):
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
         if actual_width and actual_width <= COMPACT_LAYOUT_WIDTH:
-            return "↑↓ filt g/a/l · 1-7/m/0 · r/q"
-        return "nav ↑↓/click · filters g/a/l · logs 1-7/m/0 · r refresh · q quit"
+            return "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q"
+        return "nav ↑↓/click · filters g/a/l · logs 1-7/f/h/m/0 · r refresh · q quit"
 
     def _memory_compact_actions(self) -> str:
         parts = ["[ ]", "b/n/c"]
@@ -2368,7 +2369,8 @@ class LoopDashboard(App[None]):
                 "choose a loop with ↑↓ or click a row",
                 "filters: g running · a active · l all",
                 "logs: 1 stdout · 2 stderr · 3 prompt · 4 events",
-                "      5 memory · 6 favorites · 7 history · m presets · 0 archived",
+                "      5 metrics · 6 history · 7 memory · f favorites · h mem-history",
+                "      m presets · 0 archived",
             ]
         )
 
