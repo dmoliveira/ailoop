@@ -2853,6 +2853,7 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
         "autonomy": "level-4",
         "branch_strategy": "per-iteration",
     }
+    state.workspace_config = {"root": "/tmp/scheduled-workspace"}
     service.store.save(state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
@@ -2868,6 +2869,7 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
     assert "Mode: Scheduled" in text
     assert "Mode: Scheduled · every 6 hours" in text
     assert "Next: in 6 hours · branch per iteration · Level 4 Edit + Commit" in text
+    assert "Scope: /tmp/scheduled-workspace · branch" in text
 
 
 def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
@@ -3201,6 +3203,7 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     state.current_iteration = 2
     state.average_duration_seconds = 483
     state.last_summary = "Modified 6 files and passing tests."
+    state.workspace_config = {"root": "/tmp/summary-workspace"}
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
@@ -3210,6 +3213,7 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     assert "Loop: summary-loop ·" in text
     assert "Mode: Fixed Count · every 1 minute" in text
     assert "Next: in 30 minutes · current branch · Level 3 Edit" in text
+    assert "Scope: /tmp/summary-workspace · branch" in text
     assert "Runner/Agent: echo · orchestrator" in text
     assert "Updated/Avg:" in text
     assert "Last: Modified 6 files and passing tests." in text

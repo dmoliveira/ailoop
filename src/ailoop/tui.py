@@ -1752,6 +1752,7 @@ class LoopDashboard(App[None]):
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
         mode, schedule_type, schedule_every = self._state_mode_and_schedule(loop_state)
         dashboard_config = getattr(loop_state, "dashboard_config", {}) or {}
+        workspace_config = getattr(loop_state, "workspace_config", {}) or {}
         progress_count = effective_iteration_count(
             loop_state.completed_iterations,  # type: ignore[attr-defined]
             loop_state.current_iteration,  # type: ignore[attr-defined]
@@ -1771,6 +1772,7 @@ class LoopDashboard(App[None]):
             )
         )
         next_run = self._selected_schedule_countdown_text(loop_state)
+        workspace_root = str(workspace_config.get("root", self.launch_cwd or Path.home()))
         loop_line = (
             f"Loop: {loop_state.loop_id} · {self._status_markup(loop_state.status)} · {progress}"  # type: ignore[attr-defined]
         )
@@ -1783,6 +1785,7 @@ class LoopDashboard(App[None]):
                 loop_line,
                 mode_line,
                 f"Next: {next_run} · {branch_strategy} · {autonomy}",
+                f"Scope: {workspace_root} · branch {self.current_branch}",
                 (
                     f"Runner/Agent: {loop_state.run_config.runner} · "  # type: ignore[attr-defined]
                     f"{loop_state.run_config.agent or '-'}"  # type: ignore[attr-defined]
