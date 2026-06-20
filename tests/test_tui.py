@@ -668,7 +668,11 @@ def test_summary_selected_text_compacts_mode_and_next_run() -> None:
         status = "paused"
         current_iteration = 0
         completed_iterations = 2
-        dashboard_config = {"mode": "scheduled"}
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+        }
 
         class run_config:
             agent = "orchestrator"
@@ -684,6 +688,72 @@ def test_summary_selected_text_compacts_mode_and_next_run() -> None:
     assert "iter 2/5" in text
     assert "sched" in text
     assert "next 6h" in text
+
+
+def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "selected-scheduled"
+        status = "paused"
+        current_iteration = 0
+        completed_iterations = 1
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+            "schedule_start": "09:30",
+        }
+
+        class run_config:
+            agent = "orchestrator"
+            steps = 5
+            pause_seconds = 60
+
+    app._schedule_countdown_text = lambda: "in 1 minutes"  # type: ignore[method-assign]
+
+    text = app._summary_selected_text(FakeState(), width=140)
+
+    assert "next 6h" in text
+    assert "next 1m" not in text
+
+
+def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "selected-scheduled"
+        status = "idle"
+        completed_iterations = 0
+        current_iteration = 0
+        created_at = "2026-05-16T10:40:01+00:00"
+        updated_at = "2026-05-16T10:45:01+00:00"
+        average_duration_seconds = 0
+        last_summary = None
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+            "schedule_start": "09:30",
+        }
+
+        class run_config:
+            runner = "echo"
+            agent = "orchestrator"
+            steps = None
+            pause_seconds = 60
+
+    app._schedule_countdown_text = lambda: "in 1 minutes"  # type: ignore[method-assign]
+    app.query_one = lambda selector, *_args, **_kwargs: {  # type: ignore[method-assign]
+        "#safety-autonomy": type("S", (), {"value": "level-3"})(),
+        "#workspace-branch-strategy": type("S", (), {"value": "current"})(),
+    }[selector]
+
+    text = app._loop_summary_text(FakeState())
+
+    assert "Mode: Scheduled" in text
+    assert "Next run: in 6 hours" in text
+    assert "Next run: in 1 minutes" not in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:

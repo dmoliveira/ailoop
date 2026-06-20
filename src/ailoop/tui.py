@@ -1293,6 +1293,35 @@ class LoopDashboard(App[None]):
             self._input_value("#schedule-every", self._input_value("#config-interval-value", "0")),
         )
 
+    def _schedule_countdown_from(self, interval_kind: str, raw_value: str, start_time: str) -> str:
+        countdown = "manual"
+        if interval_kind == "minutes":
+            countdown = f"in {raw_value} minutes"
+        elif interval_kind == "hours":
+            countdown = f"in {raw_value} hours"
+        elif interval_kind == "daily":
+            countdown = f"next daily window from {start_time}"
+        elif interval_kind == "weekly":
+            countdown = f"next weekly window from {start_time}"
+        elif interval_kind == "cron":
+            countdown = "cron-driven"
+        elif interval_kind == "continuous":
+            countdown = "continuous"
+        return countdown
+
+    def _selected_schedule_countdown_text(self, state: object | None) -> str:
+        mode, schedule_type, schedule_every = self._state_mode_and_schedule(state)
+        dashboard_config = getattr(state, "dashboard_config", {}) if state is not None else {}
+        start_time = str(
+            dashboard_config.get(
+                "schedule_start",
+                self._input_value("#schedule-start-time", "Now"),
+            )
+        )
+        if mode == "scheduled":
+            return self._schedule_countdown_from(schedule_type, schedule_every, start_time)
+        return self._schedule_countdown_text()
+
     def _sync_form_controls(self) -> None:
         mode = self._config_mode_value()
         interval = self._config_interval_value()
@@ -1609,7 +1638,7 @@ class LoopDashboard(App[None]):
             return "selected none"
         loop_state = state
         mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
-        schedule_hint = compact_countdown_text(self._schedule_countdown_text())
+        schedule_hint = compact_countdown_text(self._selected_schedule_countdown_text(loop_state))
         target = loop_state.run_config.steps  # type: ignore[attr-defined]
         mode_short = {"fixed": "fix", "infinite": "inf", "scheduled": "sched"}.get(mode, mode)
         iteration_text = (
@@ -1713,7 +1742,7 @@ class LoopDashboard(App[None]):
         branch_strategy = branch_strategy_label(
             self._select_value("#workspace-branch-strategy", "current")
         )
-        next_run = self._schedule_countdown_text()
+        next_run = self._selected_schedule_countdown_text(loop_state)
         return "\n".join(
             [
                 "[b][#4ea3ff]LOOP SUMMARY[/][/]",
@@ -1876,20 +1905,7 @@ class LoopDashboard(App[None]):
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
         raw_value = self._input_value("#schedule-every", "0")
         start_time = self._input_value("#schedule-start-time", "Now")
-        countdown = "manual"
-        if interval_kind == "minutes":
-            countdown = f"in {raw_value} minutes"
-        elif interval_kind == "hours":
-            countdown = f"in {raw_value} hours"
-        elif interval_kind == "daily":
-            countdown = f"next daily window from {start_time}"
-        elif interval_kind == "weekly":
-            countdown = f"next weekly window from {start_time}"
-        elif interval_kind == "cron":
-            countdown = "cron-driven"
-        elif interval_kind == "continuous":
-            countdown = "continuous"
-        return countdown
+        return self._schedule_countdown_from(interval_kind, raw_value, start_time)
 
     def _schedule_card_text(self, state: object | None) -> str:
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
