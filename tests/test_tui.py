@@ -106,6 +106,50 @@ def test_tui_mounts_and_loads_loop(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
+def test_new_loop_button_clears_selected_loop_and_returns_to_draft(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=3,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="existing-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert app.selected_loop_id == state.loop_id
+
+            event = type("Evt", (), {"button": type("Btn", (), {"id": "new-loop"})()})()
+            app.on_button_pressed(event)
+            await pilot.pause()
+
+            assert app.selected_loop_id is None
+            assert str(app.query_one("#config-status").render()) == (
+                "Draft config · new loop launch · mode infinite · schedule every 1 minute"
+            )
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_loop_table_uses_iteration_and_mode_columns(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -2853,6 +2897,7 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
         "autonomy": "level-4",
         "branch_strategy": "per-iteration",
     }
+    state.workspace_config = {"root": "/tmp/scheduled-workspace"}
     service.store.save(state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
@@ -2868,6 +2913,7 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
     assert "Mode: Scheduled" in text
     assert "Mode: Scheduled · every 6 hours" in text
     assert "Next: in 6 hours · branch per iteration · Level 4 Edit + Commit" in text
+    assert "Scope: /tmp/scheduled-workspace · branch" in text
 
 
 def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
@@ -3201,6 +3247,7 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     state.current_iteration = 2
     state.average_duration_seconds = 483
     state.last_summary = "Modified 6 files and passing tests."
+    state.workspace_config = {"root": "/tmp/summary-workspace"}
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
@@ -3210,6 +3257,7 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     assert "Loop: summary-loop ·" in text
     assert "Mode: Fixed Count · every 1 minute" in text
     assert "Next: in 30 minutes · current branch · Level 3 Edit" in text
+    assert "Scope: /tmp/summary-workspace · branch" in text
     assert "Runner/Agent: echo · orchestrator" in text
     assert "Updated/Avg:" in text
     assert "Last: Modified 6 files and passing tests." in text
