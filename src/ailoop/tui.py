@@ -557,6 +557,10 @@ class LoopDashboard(App[None]):
         margin-right: 1;
     }
 
+    .schedule-value-field {
+        width: 1fr;
+    }
+
     .compact-field:last-child {
         margin-right: 0;
     }
@@ -924,21 +928,13 @@ class LoopDashboard(App[None]):
                                 value=str(defaults["schedule_type"]),
                                 id="schedule-type",
                             )
-                    with Horizontal(classes="form-row"):
-                        with Vertical(classes="field-group"):
+                        with Vertical(classes="compact-field schedule-value-field"):
                             yield Static("Every", classes="section-title")
                             yield Input(
                                 str(defaults["schedule_every"]),
                                 id="schedule-every",
                             )
-                        with Vertical(classes="field-group"):
-                            yield Static("Start time", classes="section-title")
-                            yield Input(
-                                str(defaults["schedule_start"]),
-                                id="schedule-start-time",
-                            )
-                    with Horizontal(classes="form-row"):
-                        with Vertical(classes="field-group"):
+                        with Vertical(classes="compact-field"):
                             yield Static("Timezone", classes="section-title")
                             yield Select(
                                 [
@@ -947,6 +943,13 @@ class LoopDashboard(App[None]):
                                 ],
                                 value=str(defaults["schedule_timezone"]),
                                 id="schedule-timezone",
+                            )
+                    with Horizontal(classes="form-row"):
+                        with Vertical(classes="compact-field"):
+                            yield Static("Start time", classes="section-title")
+                            yield Input(
+                                str(defaults["schedule_start"]),
+                                id="schedule-start-time",
                             )
                 with Vertical(id="safety_card", classes="right-card"):
                     yield Static("BEHAVIOUR & SAFETY", classes="panel-title")

@@ -813,6 +813,34 @@ def test_memory_controls_only_show_in_memory_mode() -> None:
     asyncio.run(run_test())
 
 
+def test_schedule_form_uses_compact_follow_up_fields() -> None:
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            schedule_type_group = app.query_one("#schedule-type").parent
+            schedule_every_group = app.query_one("#schedule-every").parent
+            schedule_timezone_group = app.query_one("#schedule-timezone").parent
+            schedule_start_group = app.query_one("#schedule-start-time").parent
+
+            assert schedule_type_group is not None
+            assert schedule_every_group is not None
+            assert schedule_timezone_group is not None
+            assert schedule_start_group is not None
+            assert schedule_type_group.has_class("field-group")
+            assert schedule_every_group.has_class("compact-field")
+            assert schedule_every_group.has_class("schedule-value-field")
+            assert schedule_timezone_group.has_class("compact-field")
+            assert schedule_start_group.has_class("compact-field")
+            assert schedule_every_group.parent is schedule_type_group.parent
+            assert schedule_start_group.parent is not schedule_type_group.parent
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_memory_log_text_filters_to_selected_label(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
