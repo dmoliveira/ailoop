@@ -106,6 +106,50 @@ def test_tui_mounts_and_loads_loop(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
+def test_new_loop_button_clears_selected_loop_and_returns_to_draft(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=3,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="existing-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert app.selected_loop_id == state.loop_id
+
+            event = type("Evt", (), {"button": type("Btn", (), {"id": "new-loop"})()})()
+            app.on_button_pressed(event)
+            await pilot.pause()
+
+            assert app.selected_loop_id is None
+            assert str(app.query_one("#config-status").render()) == (
+                "Draft config · new loop launch · mode infinite · schedule every 1 minute"
+            )
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_loop_table_uses_iteration_and_mode_columns(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(

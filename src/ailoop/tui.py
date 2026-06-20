@@ -729,6 +729,7 @@ class LoopDashboard(App[None]):
         self.service = LoopService(Path(app_config.paths.state_dir), emit_output=False)
         self.memory = MemoryStore(Path(app_config.paths.state_dir))
         self._config_bound_loop_id: str | None = None
+        self._draft_loop_selected = False
         try:
             self.launch_cwd = Path(os.getcwd())
         except FileNotFoundError:
@@ -878,6 +879,8 @@ class LoopDashboard(App[None]):
         with Horizontal(id="main"):
             with Vertical(id="sidebar"):
                 yield Static("LOOPS", classes="panel-title")
+                with Horizontal(classes="toolbar primary-toolbar"):
+                    yield Button("+ New Loop", id="new-loop")
                 with Horizontal(classes="toolbar primary-toolbar"):
                     yield Button("g running", id="filter-running")
                     yield Button("a active", id="filter-active")
@@ -2642,7 +2645,7 @@ class LoopDashboard(App[None]):
         table = self.query_one(DataTable)
         table.clear(columns=False)
         self._render_sidebar_stats(states)
-        if self.initial_loop_id and self.selected_loop_id is None:
+        if self.initial_loop_id and self.selected_loop_id is None and not self._draft_loop_selected:
             self.selected_loop_id = self.initial_loop_id
         if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
             try:
@@ -2652,7 +2655,7 @@ class LoopDashboard(App[None]):
             else:
                 self.filter_mode = "all"
                 states = self._filtered_loops()
-        if self.selected_loop_id is None and states:
+        if self.selected_loop_id is None and states and not self._draft_loop_selected:
             self.selected_loop_id = states[0].loop_id
         if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
             self.selected_loop_id = states[0].loop_id if states else None
@@ -2773,6 +2776,7 @@ class LoopDashboard(App[None]):
     @on(DataTable.RowSelected)
     def on_loop_selected(self, event: DataTable.RowSelected) -> None:
         self.selected_loop_id = str(event.row_key.value)
+        self._draft_loop_selected = False
         self._render_selected()
 
     @on(Button.Pressed)
@@ -2780,6 +2784,8 @@ class LoopDashboard(App[None]):
         button_id = event.button.id
         if button_id == "refresh":
             self.refresh_data()
+        elif button_id == "new-loop":
+            self.action_new_loop()
         elif button_id == "pause":
             self.action_pause_selected()
         elif button_id == "start-continue":
@@ -2940,6 +2946,13 @@ class LoopDashboard(App[None]):
         )
 
     def action_refresh_data(self) -> None:
+        self.refresh_data()
+
+    def action_new_loop(self) -> None:
+        self.selected_loop_id = None
+        self._config_bound_loop_id = None
+        self.delete_armed = False
+        self._draft_loop_selected = True
         self.refresh_data()
 
     def action_filter_running(self) -> None:
