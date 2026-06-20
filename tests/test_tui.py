@@ -466,6 +466,7 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     text = app._summary_bar_text(0, 0, 0, 0, 0, None)
     assert f"memory all · labels 0 · selected {entry.id}" in text
     assert "log memory" not in text
+    assert "current branch" not in text
 
 
 def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
@@ -507,6 +508,28 @@ def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     assert text == "all 0 · act 0 · run 0 · pause 0 · fail 0 · f running · stdout · sel none"
 
 
+def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "reliability-review"
+        status = "running"
+        current_iteration = 2
+        completed_iterations = 1
+
+        class run_config:
+            steps = 5
+
+    app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
+
+    text = app._summary_selected_text(FakeState(), width=140)
+
+    assert "selected reliability-" in text
+    assert "iter 2/5" in text
+    assert "next 30m" in text
+    assert "current branch" not in text
+
+
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
     memory = MemoryStore(tmp_path)
     run_config = LoopRunConfig(
@@ -535,7 +558,7 @@ def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=120)
-    assert "logs 1/2/3/4/5/6/7/m/0" in text
+    assert "logs 1-7/m/0" in text
     assert "all" in text
     assert "1" in text
     assert "0/0" in text
@@ -1980,3 +2003,412 @@ def test_memory_restore_unarchives_selected_entry(tmp_path: Path) -> None:
     app.action_memory_restore()
     restored = memory.load(entry.id, folder=Path.cwd())
     assert restored.archived is False
+
+
+def test_sync_schedule_with_config_mirrors_non_scheduled_values() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#config-interval": FakeSelect("hours"),
+        "#config-interval-value": FakeInput("3"),
+        "#schedule-type": FakeSelect("continuous"),
+        "#schedule-every": FakeInput("0"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    app._sync_schedule_with_config()
+
+    assert widgets["#schedule-type"].value == "hours"
+    assert widgets["#schedule-every"].value == "3"
+
+
+def test_config_status_text_distinguishes_draft_from_selected_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="cfg-loop")
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-type": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("30"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    assert "Draft config" in app._config_status_text(None)
+    selected_text = app._config_status_text(state)
+    assert "Editing loop cfg-loop" in selected_text
+    assert "schedule every 30 minutes" in selected_text
+
+
+def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeTextArea:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#workspace-root": FakeInput("/tmp/workspace"),
+        "#workspace-include": FakeTextArea("src/**\ntests/**"),
+        "#workspace-exclude": FakeTextArea(".git/**\nnode_modules/**\ndist/**"),
+        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#schedule-type": FakeSelect("minutes"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("45"),
+        "#config-quiet-hours": FakeCheckbox(True),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._workspace_scope_text(None)
+
+    assert "root: /tmp/workspace" in text
+    assert "include: 2 patterns" in text
+    assert "exclude: 3 patterns" in text
+    assert "strategy: branch per iteration" in text
+    assert "schedule: every 45 minutes" in text
+    assert "quiet-hours: on" in text
+
+
+def test_iteration_progress_text_uses_current_iteration_while_running(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="progress-loop")
+    state.status = "running"
+    state.current_iteration = 2
+    state.completed_iterations = 1
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    text = app._iteration_progress_text(state)
+
+    assert "Current iteration: 2 / 5" in text
+    assert "Progress bar: █████░░░░░░░ 2/5" in text
+    assert "1/5" not in text
+
+
+def test_schedule_card_text_uses_selected_schedule_type_not_loop_mode() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#schedule-type": FakeSelect("hours"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("6"),
+        "#schedule-start-time": FakeInput("09:30"),
+        "#schedule-timezone": FakeSelect("local"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._schedule_card_text(None)
+
+    assert text.startswith("Sched: hours")
+    assert "every 6" in text
+    assert "next 6h" in text
+    assert "Schedule type: fixed" not in text
+
+
+def test_actions_status_text_summarizes_available_controls(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="controls-loop")
+    state.status = "running"
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    text = app._actions_status_text(state)
+
+    assert text.startswith("controls-loo · running")
+    assert "pause ready" in text
+    assert "stop ready" in text
+    assert "next blocked" in text
+
+
+def test_safety_card_text_compacts_preview_summary() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#safety-autonomy": FakeSelect("level-4"),
+        "#safety-branch-strategy": FakeSelect("per-iteration"),
+        "#safety-ask-before-commit": FakeCheckbox(True),
+        "#safety-ask-before-push": FakeCheckbox(False),
+        "#safety-auto-commit": FakeCheckbox(True),
+        "#safety-auto-push": FakeCheckbox(False),
+        "#safety-create-backup-branch": FakeCheckbox(True),
+        "#safety-auto-stop-on-limit": FakeCheckbox(True),
+        "#safety-max-runtime": FakeInput("4h"),
+        "#safety-max-files-changed": FakeInput("100"),
+        "#safety-max-commits": FakeInput("10"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._safety_card_text(None)
+
+    assert text.startswith("Safety: Level 4 Edit + Commit")
+    assert "limits 4h/100/10" in text
+    assert "Autonomy level:" not in text
+
+
+def test_notifications_text_compacts_preview_summary() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#notify-start": FakeCheckbox(True),
+        "#notify-success": FakeCheckbox(True),
+        "#notify-failure": FakeCheckbox(True),
+        "#notify-limit": FakeCheckbox(True),
+        "#notify-complete": FakeCheckbox(False),
+        "#notify-terminal": FakeCheckbox(True),
+        "#notify-slack": FakeCheckbox(False),
+        "#notify-email": FakeCheckbox(False),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._notifications_text()
+
+    assert text.startswith("Notify: start on")
+    assert "chan T on/S off/E off" in text
+    assert "Channels:" not in text
+
+
+def test_ops_snapshot_text_compacts_to_two_summary_lines() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        pass
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeCheckbox:
+        def __init__(self, value: bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#schedule-type": FakeSelect("minutes"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("30"),
+        "#schedule-start-time": FakeInput("Now"),
+        "#schedule-timezone": FakeSelect("local"),
+        "#safety-autonomy": FakeSelect("level-3"),
+        "#safety-branch-strategy": FakeSelect("current"),
+        "#safety-ask-before-commit": FakeCheckbox(True),
+        "#safety-ask-before-push": FakeCheckbox(True),
+        "#safety-auto-commit": FakeCheckbox(False),
+        "#safety-auto-push": FakeCheckbox(False),
+        "#safety-max-runtime": FakeInput("4h"),
+        "#safety-max-files-changed": FakeInput("100"),
+        "#safety-max-commits": FakeInput("10"),
+        "#notify-start": FakeCheckbox(True),
+        "#notify-success": FakeCheckbox(True),
+        "#notify-failure": FakeCheckbox(True),
+        "#notify-limit": FakeCheckbox(True),
+        "#notify-complete": FakeCheckbox(True),
+        "#notify-terminal": FakeCheckbox(True),
+        "#notify-slack": FakeCheckbox(False),
+        "#notify-email": FakeCheckbox(False),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._ops_snapshot_text(FakeState())
+    lines = text.splitlines()
+
+    assert lines[0] == "[b][#4ea3ff]OPS SNAPSHOT[/][/]"
+    assert len(lines) == 3
+    assert "Sched 30m" in lines[1]
+    assert "Safe L3 current" in lines[1]
+    assert "C/P on/on" in lines[2]
+    assert "ch on/off/off" in lines[2]
+
+
+def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="summary-loop")
+    state.status = "running"
+    state.completed_iterations = 2
+    state.current_iteration = 2
+    state.average_duration_seconds = 483
+    state.last_summary = "Modified 6 files and passing tests."
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
+
+    text = app._loop_summary_text(state)
+
+    assert "Branch/Autonomy: current branch · Level 3 Edit" in text
+    assert "Runner/Agent: echo · orchestrator" in text
+    assert "Updated/Avg:" in text
+    assert "Branch strategy:" not in text
+    assert "\nAutonomy:" not in text
+    assert "\nRunner:" not in text
+    assert "\nAgent:" not in text
+    assert "Avg runtime:" not in text
+
+
+def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=5,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="history-loop")
+    state.status = "running"
+    state.current_iteration = 2
+    state.completed_iterations = 1
+
+    from ailoop.models import IterationRecord
+
+    state.iterations = [
+        IterationRecord(
+            number=1,
+            started_at="2026-05-16T10:40:01+00:00",
+            finished_at="2026-05-16T10:48:13+00:00",
+            duration_seconds=492,
+            exit_code=0,
+            success=True,
+        ),
+        IterationRecord(
+            number=2,
+            started_at="2026-05-16T11:40:01+00:00",
+            duration_seconds=480,
+            success=None,
+        ),
+    ]
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    text = app._iteration_history_card_text(state)
+
+    assert "#2 Running" in text
+    assert "#2 Failed" not in text
+    assert "#2 Running · " in text
+    assert ":40 · 8m 00s" in text
+    assert "2026-05-16" not in text
