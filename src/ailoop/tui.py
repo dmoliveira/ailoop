@@ -1611,21 +1611,21 @@ class LoopDashboard(App[None]):
         compact = bool(actual_width and actual_width <= COMPACT_LAYOUT_WIDTH)
         selected_text = self._summary_selected_text(state, width=actual_width)
         if compact:
-            base = (
+            counts_text = (
                 f"L{total} · A{active} · R{running} · P{paused} · S{scheduled} · F{failed}"
             )
         else:
-            base = (
+            counts_text = (
                 f"loops {total} · active {active} · running {running} · paused {paused} · "
                 f"scheduled {scheduled} · failed {failed}"
             )
         if self.log_kind == "memory":
             if compact:
-                return f"{base} · f {self.filter_mode} · {selected_text}"
-            return f"{base} · filter {self.filter_mode} · {selected_text}"
+                return f"{selected_text} · f {self.filter_mode} · {counts_text}"
+            return f"{selected_text} · filter {self.filter_mode} · {counts_text}"
         if compact:
-            return f"{base} · f {self.filter_mode} · view {self.log_kind} · {selected_text}"
-        return f"{base} · filter {self.filter_mode} · view {self.log_kind} · {selected_text}"
+            return f"{selected_text} · f {self.filter_mode} · view {self.log_kind} · {counts_text}"
+        return f"{selected_text} · filter {self.filter_mode} · view {self.log_kind} · {counts_text}"
 
     def _summary_selected_text(self, state: object | None, width: int | None = None) -> str:
         actual_width = width or 0
@@ -1898,9 +1898,12 @@ class LoopDashboard(App[None]):
             return "Draft loop ready to start from the current config."
         loop_state = state
         status = loop_state.status  # type: ignore[attr-defined]
+        mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
         actions: list[str] = []
-        if status in {"paused", "stopped", "failed", "idle"}:
+        if status in {"paused", "stopped", "failed", "idle"} and mode != "scheduled":
             actions.append("continue ready")
+        elif status == "idle" and mode == "scheduled":
+            actions.append("continue waiting")
         if status in {"running", "pause_requested"}:
             actions.append("pause ready")
         if status in {"running", "pause_requested", "paused"}:
@@ -1929,10 +1932,20 @@ class LoopDashboard(App[None]):
         return self._schedule_countdown_from(interval_kind, raw_value, start_time)
 
     def _schedule_card_text(self, state: object | None) -> str:
-        interval_kind = self._select_value("#schedule-type", self._config_interval_value())
-        raw_value = self._input_value("#schedule-every", "0")
-        start_time = self._input_value("#schedule-start-time", "Now")
-        timezone = self._select_value("#schedule-timezone", "local").upper()
+        _mode, interval_kind, raw_value = self._state_mode_and_schedule(state)
+        dashboard_config = getattr(state, "dashboard_config", {}) if state is not None else {}
+        start_time = str(
+            dashboard_config.get(
+                "schedule_start",
+                self._input_value("#schedule-start-time", "Now"),
+            )
+        )
+        timezone = str(
+            dashboard_config.get(
+                "schedule_timezone",
+                self._select_value("#schedule-timezone", "local"),
+            )
+        ).upper()
         type_label = {
             "continuous": "continuous",
             "minutes": "minutes",
@@ -1941,7 +1954,7 @@ class LoopDashboard(App[None]):
             "weekly": "weekly",
             "cron": "cron",
         }.get(interval_kind, interval_kind)
-        countdown = self._schedule_countdown_text()
+        countdown = self._selected_schedule_countdown_text(state)
         return (
             f"Sched: {type_label} · every {raw_value} · start {start_time} · "
             f"tz {timezone} · {compact_countdown_text(countdown)}"

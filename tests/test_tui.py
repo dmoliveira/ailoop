@@ -508,7 +508,7 @@ def test_summary_bar_text_omits_redundant_memory_log_prefix(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None)
-    assert f"memory all · labels 0 · selected {entry.id}" in text
+    assert text.startswith(f"memory all · labels 0 · selected {entry.id}")
     assert "log memory" not in text
     assert "current branch" not in text
 
@@ -541,9 +541,9 @@ def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
     app.memory = memory
     app.log_kind = "memory"
     text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
-    assert "L0 · A0 · R0 · P0 · S0 · F0" in text
+    assert text.startswith(f"mem all · lab 0 · sel {entry.id[:8]}")
     assert "f running" in text
-    assert f"mem all · lab 0 · sel {entry.id[:8]}" in text
+    assert "L0 · A0 · R0 · P0 · S0 · F0" in text
 
 
 def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
@@ -551,8 +551,31 @@ def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
     assert (
         text
-        == "L0 · A0 · R0 · P0 · S0 · F0 · f running · view stdout · sel none"
+        == "sel none · f running · view stdout · L0 · A0 · R0 · P0 · S0 · F0"
     )
+
+
+def test_summary_bar_text_prioritizes_selected_loop_context() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        loop_id = "reliability-review"
+        status = "running"
+        current_iteration = 2
+        completed_iterations = 1
+
+        class run_config:
+            agent = "orchestrator"
+            steps = 5
+            pause_seconds = 1800
+
+    app._schedule_countdown_text = lambda: "in 30 minutes"  # type: ignore[method-assign]
+
+    text = app._summary_bar_text(3, 2, 1, 1, 0, 1, FakeState(), width=140)
+
+    assert text.startswith("selected reliability-")
+    assert "filter running · view stdout" in text
+    assert text.endswith("loops 3 · active 2 · running 1 · paused 1 · scheduled 1 · failed 0")
 
 
 def test_footer_base_text_mentions_metrics_and_memory_shortcuts() -> None:
@@ -2462,6 +2485,50 @@ def test_schedule_card_text_uses_selected_schedule_type_not_loop_mode() -> None:
     assert "Schedule type: fixed" not in text
 
 
+def test_schedule_card_text_prefers_selected_loop_schedule_over_form_defaults() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "6",
+            "schedule_start": "09:30",
+            "schedule_timezone": "utc",
+        }
+
+        class run_config:
+            steps = None
+            pause_seconds = 60
+
+    class FakeSelect:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    class FakeInput:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    widgets = {
+        "#config-mode": FakeSelect("fixed"),
+        "#config-interval": FakeSelect("minutes"),
+        "#schedule-type": FakeSelect("minutes"),
+        "#schedule-every": FakeInput("1"),
+        "#schedule-start-time": FakeInput("Now"),
+        "#schedule-timezone": FakeSelect("local"),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._schedule_card_text(FakeState())
+
+    assert text.startswith("Sched: hours")
+    assert "every 6" in text
+    assert "start 09:30" in text
+    assert "tz UTC" in text
+    assert "next 6h" in text
+    assert "every 1" not in text
+
+
 def test_right_rail_previews_are_visible_after_render() -> None:
     async def run_test() -> None:
         app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
@@ -2534,6 +2601,37 @@ def test_actions_status_text_marks_next_iteration_ready_when_loop_can_step(tmp_p
     assert text.startswith("step-loop · paused")
     assert "continue ready" in text
     assert "next ready" in text
+
+
+def test_actions_status_text_blocks_continue_for_scheduled_idle_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-idle")
+    state.status = "idle"
+    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    text = app._actions_status_text(state)
+
+    assert text.startswith("scheduled-id · idle")
+    assert "continue waiting" in text
+    assert "continue ready" not in text
 
 
 def test_action_next_iteration_requests_single_step_and_resume(tmp_path: Path) -> None:
