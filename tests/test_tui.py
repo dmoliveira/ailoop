@@ -2358,7 +2358,7 @@ def test_config_status_text_distinguishes_draft_from_selected_loop(tmp_path: Pat
     assert "Draft config" in app._config_status_text(None)
     selected_text = app._config_status_text(state)
     assert "Editing loop cfg-loop" in selected_text
-    assert "schedule every 30 minutes" in selected_text
+    assert "schedule every 1 minutes" in selected_text
 
 
 def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
