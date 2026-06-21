@@ -1,6 +1,7 @@
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from textual.widgets import DataTable
@@ -8,7 +9,14 @@ from textual.widgets import DataTable
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig
 from ailoop.service import LoopService
-from ailoop.tui import LoopDashboard, launch_in_tmux, read_events, render_progress_text, tail_text
+from ailoop.tui import (
+    LoopDashboard,
+    launch_in_tmux,
+    process_rss_bytes,
+    read_events,
+    render_progress_text,
+    tail_text,
+)
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
@@ -731,6 +739,46 @@ def test_render_sidebar_stats_shows_activity_counts() -> None:
 
     assert "loops 4 · active 3 · running 1 · paused 1 · scheduled 0 · failed 1" in sidebar.value
     assert "filter running · query review · selected reliability-" in sidebar.value
+
+
+def test_render_system_stats_shows_load_rss_disk() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.selected_loop_id = "reliability-review"
+
+    class FakeStatic:
+        def __init__(self) -> None:
+            self.value = ""
+
+        def update(self, value: str) -> None:
+            self.value = value
+
+    system = FakeStatic()
+    app.query_one = lambda *_args, **_kwargs: system  # type: ignore[method-assign]
+    app.launch_cwd = Path.home()
+
+    with patch("os.getloadavg", return_value=(0.42, 0.0, 0.0)):
+        with patch("ailoop.tui.process_rss_bytes", return_value=2 * 1024 * 1024):
+            with patch(
+                "shutil.disk_usage",
+                return_value=(10_000_000_000, 4_000_000_000, 6_000_000_000),
+            ):
+                app._render_system_stats([])
+
+    assert "SYSTEM" in system.value
+    assert "Load 1m: 0.42" in system.value
+    assert "App RSS: 2.0 MB" in system.value
+    assert "Disk free: 5.6 GB" in system.value
+    assert "Target: reliabilit" in system.value
+
+
+def test_process_rss_bytes_handles_platform_units() -> None:
+    fake_rusage = type("R", (), {"ru_maxrss": 2048})()
+
+    with patch("resource.getrusage", return_value=fake_rusage):
+        with patch("sys.platform", "darwin"):
+            assert process_rss_bytes() == 2048
+        with patch("sys.platform", "linux"):
+            assert process_rss_bytes() == 2048 * 1024
 
 
 def test_summary_selected_text_shortens_next_run_for_wide_layout() -> None:

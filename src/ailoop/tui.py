@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import resource
 import shlex
+import shutil
 import subprocess
 import sys
 from datetime import UTC, datetime
@@ -224,6 +226,23 @@ def mini_bar(completed: int, total: int, width: int = 12) -> str:
     ratio = min(max(completed / total, 0), 1)
     filled = min(width, max(0, round(ratio * width)))
     return "█" * filled + "░" * (width - filled)
+
+
+def format_storage_bytes(value: int) -> str:
+    units = ["B", "KB", "MB", "GB", "TB"]
+    size = float(max(value, 0))
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def process_rss_bytes() -> int:
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return int(rss if sys.platform == "darwin" else rss * 1024)
 
 
 def extract_modified_files(summary: str | None) -> int:
@@ -888,6 +907,7 @@ class LoopDashboard(App[None]):
                 yield Input(placeholder="Search loops...", id="loop-query")
                 yield Static(id="sidebar_stats")
                 yield DataTable(id="loops", zebra_stripes=True)
+                yield Static(id="system_stats", classes="card-static")
             with Vertical(id="content"):
                 with Horizontal(id="top_row", classes="card-row"):
                     yield Static(id="loop_summary", classes="card-static")
@@ -1605,6 +1625,28 @@ class LoopDashboard(App[None]):
         sidebar_stats.update(
             f"{counts_text}\n"
             f"filter {self.filter_mode} · query {query} · selected {selected}"
+        )
+
+    def _render_system_stats(self, states: list[object]) -> None:
+        try:
+            system_stats = self.query_one("#system_stats", Static)
+        except Exception:
+            return
+        load_1 = os.getloadavg()[0] if hasattr(os, "getloadavg") else 0.0
+        rss_bytes = process_rss_bytes()
+        disk_root = self.launch_cwd or Path.home()
+        free_bytes = shutil.disk_usage(disk_root)[2]
+        selected = short_loop_id(self.selected_loop_id) if self.selected_loop_id else "draft"
+        system_stats.update(
+            "\n".join(
+                [
+                    "[b][#4ea3ff]SYSTEM[/][/]",
+                    f"Load 1m: {load_1:.2f}",
+                    f"App RSS: {format_storage_bytes(rss_bytes)}",
+                    f"Disk free: {format_storage_bytes(free_bytes)}",
+                    f"Target: {selected}",
+                ]
+            )
         )
 
     def _summary_bar_text(
@@ -2645,6 +2687,7 @@ class LoopDashboard(App[None]):
         table = self.query_one(DataTable)
         table.clear(columns=False)
         self._render_sidebar_stats(states)
+        self._render_system_stats(states)
         if self.initial_loop_id and self.selected_loop_id is None and not self._draft_loop_selected:
             self.selected_loop_id = self.initial_loop_id
         if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
