@@ -587,7 +587,7 @@ def _resolve_memory_run_config(args: argparse.Namespace, app_config) -> object:
         agent_file=args.agent_file,
         task_file=args.task_file,
         stop_when_tasks_complete=True if getattr(args, "until_tasks_complete", False) else None,
-        workspace_root=getattr(args, "workspace_root", None) or str(Path.cwd()),
+        workspace_root=getattr(args, "workspace_root", None),
     )
 
 

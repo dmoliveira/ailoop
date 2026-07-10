@@ -69,3 +69,12 @@ def test_single_iteration_rejects_locked_loop(tmp_path: Path) -> None:
     with service.store.acquire_lock(state.loop_id):
         with pytest.raises(RuntimeError, match="Loop is already active"):
             service.request_single_iteration(state.loop_id)
+
+
+def test_run_without_workspace_root_does_not_create_workspace_history(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    config = build_run_config()
+    config.steps = 1
+    state = service.create_loop(config, loop_id="isolated-cli-style-run")
+    service.run_loop(state.loop_id)
+    assert not (tmp_path / "state" / "workspaces").exists()
