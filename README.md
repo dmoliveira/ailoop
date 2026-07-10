@@ -41,6 +41,7 @@ Most AI terminal workflows start as a quick `while true` loop, then grow messy f
 - ✅ pause / resume / stop controls
 - ✅ strict Markdown task-file mode
 - ✅ saved presets + replayable history
+- ✅ workspace-aware TUI follow-ups + prompt history
 - ✅ stats, logs, and tail commands
 - ✅ JSON output for automation
 
@@ -71,6 +72,7 @@ Start:
 ```bash
 ailoop init-config
 ailoop run "Review the repo and iterate for 3 steps." --runner opencode --agent orchestrator --steps 3
+ailoop run "Work this repo." --workspace-root . --steps 3
 ailoop run "Do exactly 5 iterations." --steps 5
 ```
 
@@ -196,6 +198,14 @@ ailoop stats <loop-id>
 ailoop logs <loop-id>
 ailoop tail <loop-id>
 ```
+
+TUI follow-up workflow:
+
+- set **Root directory** to the repo/workspace you want to run
+- type the base prompt in **AI LOOP CONFIG** and start or continue the loop
+- type a one-shot instruction in **Follow-up for next iteration** and queue it with the button or `Ctrl+Enter`
+- use `Shift+N` for one unchanged next iteration and `Ctrl+J` / `Ctrl+K` to switch loops
+- the `6 history` panel now shows recent workspace prompt/follow-up/result history plus loop iteration history
 
 TUI memory smoke:
 

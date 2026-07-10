@@ -43,6 +43,10 @@ class VersionSnapshot:
     no_pre_prompt: bool
     no_agent_file: bool
     agent_file: str | None
+    workspace_root: str | None = None
+    workspace_history_enabled: bool = True
+    workspace_history_limit: int = 5
+    workspace_history_chars: int = 1200
     extra_args: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -151,6 +155,10 @@ def snapshot_from_run_config(
         no_pre_prompt=not run_config.pre_prompt_enabled,
         no_agent_file=not run_config.attach_agent_file,
         agent_file=run_config.agent_file,
+        workspace_root=run_config.workspace_root,
+        workspace_history_enabled=run_config.workspace_history_enabled,
+        workspace_history_limit=run_config.workspace_history_limit,
+        workspace_history_chars=run_config.workspace_history_chars,
     )
 
 
@@ -427,4 +435,8 @@ def run_config_from_entry(entry: MemoryEntry, app_config: AppConfig) -> LoopRunC
         agent_file=current.agent_file,
         task_file=current.task_file,
         stop_when_tasks_complete=current.until_tasks_complete,
+        workspace_root=current.workspace_root or entry.scope.folder_path,
+        workspace_history_enabled=current.workspace_history_enabled,
+        workspace_history_limit=current.workspace_history_limit,
+        workspace_history_chars=current.workspace_history_chars,
     )

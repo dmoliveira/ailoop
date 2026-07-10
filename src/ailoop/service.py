@@ -12,6 +12,11 @@ from .runners import LocalRunner
 from .state import StateStore
 from .stats import render_iteration_summary
 from .tasks import parse_task_file
+from .workspace_history import (
+    WorkspaceHistoryStore,
+    canonical_workspace_root,
+    workspace_prompt_signature,
+)
 
 
 class LoopService:
@@ -20,8 +25,19 @@ class LoopService:
         self.runner = LocalRunner()
         self.state_root = state_root
         self.emit_output = emit_output
+        self.workspace_history = WorkspaceHistoryStore(state_root)
+
+    def _normalize_workspace_root(self, workspace_root: str | None) -> str | None:
+        normalized = canonical_workspace_root(workspace_root)
+        if normalized is None:
+            return None
+        path = Path(normalized)
+        if not path.exists() or not path.is_dir():
+            raise FileNotFoundError(f"Workspace root not found: {normalized}")
+        return normalized
 
     def create_loop(self, run_config: LoopRunConfig, loop_id: str | None = None) -> LoopState:
+        run_config.workspace_root = self._normalize_workspace_root(run_config.workspace_root)
         resolved_loop_id = loop_id or uuid.uuid4().hex[:12]
         if raw_loop_dir(self.state_root, resolved_loop_id).exists():
             raise RuntimeError(f"Loop already exists: {resolved_loop_id}")
@@ -35,7 +51,27 @@ class LoopService:
         )
         self.store.save(state)
         self.store.append_event(state.loop_id, {"at": utc_now(), "event": "created"})
+        self._record_workspace_prompt_if_changed(state)
         return state
+
+    def _record_workspace_prompt_if_changed(self, state: LoopState) -> None:
+        signature = workspace_prompt_signature(
+            state.run_config.workspace_root,
+            state.run_config.prompt,
+        )
+        if not state.run_config.workspace_history_enabled or signature is None:
+            return
+        if signature == state.workspace_prompt_signature:
+            return
+        if state.workspace_prompt_signature is None:
+            latest_prompt = self.workspace_history.latest_prompt(state.run_config.workspace_root)
+            if latest_prompt == state.run_config.prompt.strip():
+                state.workspace_prompt_signature = signature
+                self.store.save(state)
+                return
+        self.workspace_history.append_prompt(state.loop_id, state.run_config)
+        state.workspace_prompt_signature = signature
+        self.store.save(state)
 
     def load_loop(self, loop_id: str) -> LoopState:
         return self.store.load(loop_id)
@@ -81,7 +117,30 @@ class LoopService:
         self.store.append_event(loop_id, {"at": utc_now(), "event": "control", "control": control})
         return state
 
+    def queue_follow_up(self, loop_id: str, follow_up: str) -> LoopState:
+        cleaned = follow_up.strip()
+        if not cleaned:
+            raise ValueError("Follow-up prompt is empty")
+        state = self.store.load(loop_id)
+        state.queued_follow_up = cleaned
+        state.queued_follow_up_token = uuid.uuid4().hex
+        self.store.save(state)
+        self.store.append_event(loop_id, {"at": utc_now(), "event": "follow_up_queued"})
+        return state
+
+    def clear_follow_up(self, loop_id: str) -> LoopState:
+        state = self.store.load(loop_id)
+        if self.store.is_locked(loop_id) or state.pending_single_iteration:
+            raise RuntimeError("Cannot clear a follow-up while an iteration is active")
+        state.queued_follow_up = None
+        state.queued_follow_up_token = None
+        self.store.save(state)
+        self.store.append_event(loop_id, {"at": utc_now(), "event": "follow_up_cleared"})
+        return state
+
     def request_single_iteration(self, loop_id: str) -> LoopState:
+        if self.store.is_locked(loop_id):
+            raise RuntimeError(f"Loop is already active: {loop_id}")
         state = self.store.load(loop_id)
         if state.status in {"running", "pause_requested", "stop_requested"}:
             raise RuntimeError(f"Loop is already active: {loop_id}")
@@ -111,6 +170,10 @@ class LoopService:
     def run_loop(self, loop_id: str) -> LoopState:
         with self.store.acquire_lock(loop_id):
             state = self.store.load(loop_id)
+            state.run_config.workspace_root = self._normalize_workspace_root(
+                state.run_config.workspace_root
+            )
+            self._record_workspace_prompt_if_changed(state)
             self._validate_task_file(state)
             if state.control == "stop":
                 state.status = "stopped"
@@ -199,10 +262,30 @@ class LoopService:
         prompt_path = logs / f"iteration-{iteration_number:04d}.prompt.txt"
         stdout_path = logs / f"iteration-{iteration_number:04d}.stdout.log"
         stderr_path = logs / f"iteration-{iteration_number:04d}.stderr.log"
-        prompt_text = build_prompt(state, iteration_number)
+        consumed_follow_up = state.queued_follow_up
+        consumed_follow_up_token = state.queued_follow_up_token
+        recent_workspace_history = (
+            self.workspace_history.recent_entries(
+                state.run_config.workspace_root,
+                limit=state.run_config.workspace_history_limit,
+                max_chars=state.run_config.workspace_history_chars,
+            )
+            if state.run_config.workspace_history_enabled
+            else []
+        )
+        prompt_text = build_prompt(
+            state,
+            iteration_number,
+            recent_workspace_history=recent_workspace_history,
+        )
         prompt_path.write_text(prompt_text)
         iteration.prompt_file = str(prompt_path)
-        self.store.save(state)
+        if state.run_config.workspace_history_enabled and consumed_follow_up:
+            self.workspace_history.append_follow_up(
+                state.run_config.workspace_root,
+                state.loop_id,
+                consumed_follow_up,
+            )
 
         attempt = 0
         result = None
@@ -228,6 +311,11 @@ class LoopService:
                 env=env,
                 stdout_log=stdout_path,
                 stderr_log=stderr_path,
+                cwd=(
+                    Path(state.run_config.workspace_root)
+                    if state.run_config.workspace_root
+                    else None
+                ),
             )
             if result.exit_code == 0:
                 break
@@ -244,6 +332,8 @@ class LoopService:
 
         latest_state = self.store.load(state.loop_id)
         state.control = latest_state.control
+        latest_follow_up = latest_state.queued_follow_up
+        latest_follow_up_token = latest_state.queued_follow_up_token
 
         state.iterations.append(iteration)
         state.completed_iterations += 1
@@ -253,7 +343,16 @@ class LoopService:
         state.average_duration_seconds = state.total_duration_seconds / state.completed_iterations
         state.last_summary = iteration.summary
         state.consecutive_failures = 0 if iteration.success else state.consecutive_failures + 1
-        state.status = "running"
+        state.status = (
+            latest_state.status
+            if latest_state.status in {"pause_requested", "stop_requested"}
+            else "running"
+        )
+        state.queued_follow_up = latest_follow_up
+        state.queued_follow_up_token = latest_follow_up_token
+        if state.queued_follow_up_token == consumed_follow_up_token:
+            state.queued_follow_up = None
+            state.queued_follow_up_token = None
         self.store.save(state)
         self.store.append_event(
             state.loop_id,
@@ -265,6 +364,12 @@ class LoopService:
                 "duration_seconds": result.duration_seconds,
             },
         )
+        if state.run_config.workspace_history_enabled:
+            self.workspace_history.append_result(
+                state.run_config.workspace_root,
+                state.loop_id,
+                iteration,
+            )
         if self.emit_output:
             print(render_iteration_summary(state), flush=True)
         return state

@@ -74,6 +74,10 @@ class LoopRunConfig:
     task_file: str | None = None
     stop_when_tasks_complete: bool = False
     max_doing: int = 1
+    workspace_root: str | None = None
+    workspace_history_enabled: bool = True
+    workspace_history_limit: int = 5
+    workspace_history_chars: int = 1200
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -112,6 +116,9 @@ class LoopState:
     average_duration_seconds: float = 0.0
     last_summary: str | None = None
     pending_single_iteration: bool = False
+    queued_follow_up: str | None = None
+    queued_follow_up_token: str | None = None
+    workspace_prompt_signature: str | None = None
     dashboard_config: dict[str, Any] = field(default_factory=dict)
     workspace_config: dict[str, str] = field(default_factory=dict)
     iterations: list[IterationRecord] = field(default_factory=list)
@@ -141,6 +148,9 @@ class LoopState:
             average_duration_seconds=data.get("average_duration_seconds", 0.0),
             last_summary=data.get("last_summary"),
             pending_single_iteration=data.get("pending_single_iteration", False),
+            queued_follow_up=data.get("queued_follow_up"),
+            queued_follow_up_token=data.get("queued_follow_up_token"),
+            workspace_prompt_signature=data.get("workspace_prompt_signature"),
             dashboard_config=data.get("dashboard_config", {}),
             workspace_config=data.get("workspace_config", {}),
             iterations=iterations,

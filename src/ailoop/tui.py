@@ -717,6 +717,11 @@ class LoopDashboard(App[None]):
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
+        ("ctrl+j", "loop_next", "Next Loop"),
+        ("ctrl+k", "loop_prev", "Prev Loop"),
+        ("shift+n", "next_iteration", "Next Iter"),
+        ("i", "follow_up_focus", "Focus Follow-up"),
+        ("ctrl+enter", "queue_follow_up", "Queue Follow-up"),
     ]
 
     selected_loop_id: reactive[str | None] = reactive(None)
@@ -762,10 +767,57 @@ class LoopDashboard(App[None]):
     def _memory_folder(self) -> Path | None:
         if self.memory_all_folders:
             return None
-        return self.launch_cwd
+        return self._active_workspace_root() or self.launch_cwd
 
     def _can_toggle_memory_scope(self) -> bool:
         return self.launch_cwd is not None
+
+    def _text_input_has_focus(self) -> bool:
+        try:
+            focused = self.focused
+        except Exception:
+            return False
+        return isinstance(focused, Input | TextArea)
+
+    def _active_workspace_root(self, state: object | None = None) -> Path | None:
+        loop_state = state or self._selected_state()
+        if loop_state is not None and getattr(loop_state.run_config, "workspace_root", None):  # type: ignore[attr-defined]
+            return Path(loop_state.run_config.workspace_root)  # type: ignore[attr-defined]
+        root_text = self._input_value(
+            "#workspace-root",
+            str(self.launch_cwd or Path.home()),
+        ).strip()
+        if not root_text:
+            return self.launch_cwd
+        try:
+            return Path(root_text).expanduser().resolve()
+        except Exception:
+            return self.launch_cwd
+
+    def _follow_up_text(self) -> str:
+        return self.query_one("#follow-up-prompt", TextArea).text.strip()
+
+    def _detect_branch_for(self, path: Path | None) -> str:
+        if path is None:
+            return "-"
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                cwd=path,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception:
+            return "-"
+        return result.stdout.strip() or "-"
+
+    def _refresh_workspace_branch(self, state: object | None = None) -> None:
+        self.current_branch = self._detect_branch_for(self._active_workspace_root(state))
+        try:
+            self.query_one("#workspace-current-branch", Static).update(self.current_branch)
+        except Exception:
+            pass
 
     def _detect_branch(self) -> str:
         if self.launch_cwd is None:
@@ -924,6 +976,11 @@ class LoopDashboard(App[None]):
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("⟳ Refresh", id="refresh")
                         yield Static(id="actions-status", classes="mini-note")
+                        yield Static("Follow-up for next iteration", classes="section-title")
+                        yield TextArea("", id="follow-up-prompt")
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("Queue & Run Follow-up", id="queue-follow-up")
+                            yield Button("Clear Queued", id="clear-follow-up")
                 with Horizontal(id="middle_row", classes="card-row"):
                     with Vertical(id="config_card", classes="card"):
                         yield Static("AI LOOP CONFIG", classes="panel-title")
@@ -1452,6 +1509,8 @@ class LoopDashboard(App[None]):
                 **workspace_defaults,
                 **getattr(loop_state, "workspace_config", {}),
             }
+            if getattr(loop_state.run_config, "workspace_root", None):  # type: ignore[attr-defined]
+                workspace_values["root"] = loop_state.run_config.workspace_root  # type: ignore[attr-defined]
         self.query_one("#config-prompt", TextArea).text = str(values["prompt"])
         self.query_one("#config-mode", Select).value = str(values["mode"])
         set_input("#config-iterations", values["iterations"])
@@ -1465,6 +1524,12 @@ class LoopDashboard(App[None]):
         set_input("#workspace-root", workspace_values["root"])
         self.query_one("#workspace-include", TextArea).text = str(workspace_values["include"])
         self.query_one("#workspace-exclude", TextArea).text = str(workspace_values["exclude"])
+        follow_up_text = (
+            (getattr(loop_state, "queued_follow_up", None) or "")
+            if state is not None
+            else ""
+        )
+        self.query_one("#follow-up-prompt", TextArea).text = follow_up_text
         try:
             self.query_one("#schedule-type", Select).value = str(values["schedule_type"])
             set_input("#schedule-every", values["schedule_every"])
@@ -1521,6 +1586,13 @@ class LoopDashboard(App[None]):
             task_file = self.app_config.tasks.file
             stop_when_tasks_complete = self.app_config.tasks.stop_when_complete
             max_doing = self.app_config.tasks.max_doing
+            workspace_root = self._input_value(
+                "#workspace-root",
+                str(self.launch_cwd or Path.home()),
+            ).strip()
+            workspace_history_enabled = True
+            workspace_history_limit = 5
+            workspace_history_chars = 1200
         else:
             loop_state = state
             runner_name = loop_state.run_config.runner  # type: ignore[attr-defined]
@@ -1537,6 +1609,13 @@ class LoopDashboard(App[None]):
             task_file = loop_state.run_config.task_file  # type: ignore[attr-defined]
             stop_when_tasks_complete = loop_state.run_config.stop_when_tasks_complete  # type: ignore[attr-defined]
             max_doing = loop_state.run_config.max_doing  # type: ignore[attr-defined]
+            workspace_root = self._input_value(
+                "#workspace-root",
+                str(loop_state.run_config.workspace_root or self.launch_cwd or Path.home()),
+            ).strip()  # type: ignore[attr-defined]
+            workspace_history_enabled = loop_state.run_config.workspace_history_enabled  # type: ignore[attr-defined]
+            workspace_history_limit = loop_state.run_config.workspace_history_limit  # type: ignore[attr-defined]
+            workspace_history_chars = loop_state.run_config.workspace_history_chars  # type: ignore[attr-defined]
         from .models import LoopRunConfig
 
         return LoopRunConfig(
@@ -1561,6 +1640,10 @@ class LoopDashboard(App[None]):
             task_file=task_file,
             stop_when_tasks_complete=stop_when_tasks_complete,
             max_doing=max_doing,
+            workspace_root=workspace_root or None,
+            workspace_history_enabled=workspace_history_enabled,
+            workspace_history_limit=workspace_history_limit,
+            workspace_history_chars=workspace_history_chars,
         )
 
     def _status_markup(self, status: str) -> str:
@@ -1817,7 +1900,10 @@ class LoopDashboard(App[None]):
             )
         )
         next_run = self._selected_schedule_countdown_text(loop_state)
-        workspace_root = str(workspace_config.get("root", self.launch_cwd or Path.home()))
+        workspace_root = str(
+            getattr(loop_state.run_config, "workspace_root", None)
+            or workspace_config.get("root", self.launch_cwd or Path.home())
+        )
         loop_line = (
             f"Loop: {loop_state.loop_id} · {self._status_markup(loop_state.status)} · {progress}"  # type: ignore[attr-defined]
         )
@@ -1868,6 +1954,7 @@ class LoopDashboard(App[None]):
                 f"strategy: {branch_strategy}",
                 f"schedule: {schedule_scope}",
                 f"quiet-hours: {quiet_hours}",
+                "workspace root is enforced as runner cwd",
             ]
         )
 
@@ -1967,8 +2054,18 @@ class LoopDashboard(App[None]):
         if status in {"paused", "stopped", "failed", "completed"}:
             actions.append("restart ready")
         actions.append("next ready" if self._can_next_iteration(loop_state) else "next blocked")
+        if getattr(loop_state, "queued_follow_up", None):
+            actions.append("follow-up queued")
         action_text = " · ".join(actions)
         return f"{short_loop_id(loop_state.loop_id)} · {short_status(status)} · {action_text}"
+
+    def _can_queue_follow_up(self, state: object | None) -> bool:
+        if state is None:
+            return False
+        loop_state = state
+        if loop_state.status == "completed" and not self.service.should_continue(loop_state):  # type: ignore[arg-type]
+            return False
+        return True
 
     def _can_next_iteration(self, state: object | None) -> bool:
         if state is None:
@@ -2201,12 +2298,29 @@ class LoopDashboard(App[None]):
         return "\n".join(lines)
 
     def _history_log_text(self, state: object | None) -> str:
+        workspace_root = str(self._active_workspace_root(state) or "")
+        rows: list[str] = []
+        if workspace_root:
+            rows.append(f"WORKSPACE HISTORY · {workspace_root}")
+            for entry in self.service.workspace_history.recent_entries(
+                workspace_root,
+                limit=20,
+                max_chars=4000,
+            ):
+                text_value = " ".join((entry.prompt or entry.summary or "-").split())[:220]
+                rows.append(
+                    f"[{format_timestamp(entry.recorded_at)}] {entry.kind} · "
+                    f"loop={short_loop_id(entry.loop_id)} · {text_value}"
+                )
+            if len(rows) == 1:
+                rows.append("No workspace prompt history yet.")
         if state is None:
-            return "No loop selected."
+            return "\n".join(rows or ["No loop selected."])
         loop_state = state
+        rows.extend(["", f"LOOP ITERATIONS · {loop_state.loop_id}"])
         if not loop_state.iterations:  # type: ignore[attr-defined]
-            return "No iteration history yet."
-        rows = []
+            rows.append("No iteration history yet.")
+            return "\n".join(rows)
         for item in reversed(loop_state.iterations[-20:]):  # type: ignore[attr-defined]
             label = "ok" if item.success else "fail"
             rows.append(
@@ -2215,6 +2329,8 @@ class LoopDashboard(App[None]):
             )
             if item.summary:
                 rows.append(f"  summary: {item.summary}")
+            if item.prompt_file:
+                rows.append(f"  prompt: {item.prompt_file}")
         return "\n".join(rows)
 
     def _metrics_log_text(self, state: object | None) -> str:
@@ -2315,6 +2431,15 @@ class LoopDashboard(App[None]):
             self.query_one("#restart", Button).disabled = not can_restart
             self.query_one("#restart-reset", Button).disabled = not can_restart_reset
             self.query_one("#next-iteration", Button).disabled = not can_next_iteration
+            self.query_one("#queue-follow-up", Button).disabled = (
+                not self._can_queue_follow_up(state) or not bool(self._follow_up_text())
+            )
+            self.query_one("#clear-follow-up", Button).disabled = not bool(
+                state is not None
+                and state.queued_follow_up
+                and not state.pending_single_iteration
+                and not self.service.store.is_locked(state.loop_id)
+            )
             self.query_one("#save-config", Button).disabled = status in {
                 "running",
                 "pause_requested",
@@ -2323,6 +2448,8 @@ class LoopDashboard(App[None]):
             self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
             self.query_one("#restart-reset", Button).label = "↺ Reset Counter"
             self.query_one("#next-iteration", Button).label = "≫ Next Iteration"
+            self.query_one("#queue-follow-up", Button).label = "Queue & Run Follow-up"
+            self.query_one("#clear-follow-up", Button).label = "Clear Queued"
             self.query_one("#save-config", Button).label = "Save Config"
             self.query_one("#run-loop", Button).label = "Run Loop"
         except Exception:
@@ -2387,6 +2514,10 @@ class LoopDashboard(App[None]):
             actions.append("d confirm delete")
         if loop_state in {"paused", "stopped", "failed", "completed"}:
             actions.append("restart")
+        actions.append("ctrl+j/k switch loop")
+        actions.append("i focus follow-up")
+        actions.append("ctrl+enter queue/run follow-up")
+        actions.append("N next iteration")
         action_text = " · ".join(actions) if actions else "read only"
         bar.update(f"{base} · actions {action_text}")
 
@@ -2766,6 +2897,7 @@ class LoopDashboard(App[None]):
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
+        self._refresh_workspace_branch(state)
         if modern_layout:
             self._sync_config_form_from_state(state)
         self._render_summary_bar()
@@ -2797,7 +2929,8 @@ class LoopDashboard(App[None]):
 
         paths = self.service.loop_paths(state.loop_id) if state.iterations else None
         log_meta.update(
-            f"source {self.log_kind} · loop {short_loop_id(state.loop_id)} · refresh 1s"
+            f"source {self.log_kind} · loop {short_loop_id(state.loop_id)} · "
+            f"workspace {state.run_config.workspace_root or '-'} · refresh 1s"
         )
         if self.log_kind == "events":
             if paths:
@@ -2841,6 +2974,10 @@ class LoopDashboard(App[None]):
             self.action_restart_reset_selected()
         elif button_id == "next-iteration":
             self.action_next_iteration()
+        elif button_id == "queue-follow-up":
+            self.action_queue_follow_up()
+        elif button_id == "clear-follow-up":
+            self.action_clear_follow_up()
         elif button_id == "save-config":
             self.action_save_config()
         elif button_id == "run-loop":
@@ -2900,9 +3037,13 @@ class LoopDashboard(App[None]):
 
     @on(Input.Changed, "#workspace-root")
     def on_workspace_root_changed(self, _event: Input.Changed) -> None:
+        self._refresh_workspace_branch()
         self._render_selected()
 
-    @on(TextArea.Changed, "#workspace-include, #workspace-exclude, #config-prompt")
+    @on(
+        TextArea.Changed,
+        "#workspace-include, #workspace-exclude, #config-prompt, #follow-up-prompt",
+    )
     def on_textarea_changed(self, _event: TextArea.Changed) -> None:
         self._sync_button_state()
         self._render_selected()
@@ -2950,7 +3091,7 @@ class LoopDashboard(App[None]):
         self._render_selected()
 
     def _spawn_cwd(self) -> Path:
-        return self.launch_cwd or Path.home()
+        return self._active_workspace_root() or self.launch_cwd or Path.home()
 
     def _spawn_resume(self, loop_id: str) -> None:
         subprocess.Popen(
@@ -2970,18 +3111,21 @@ class LoopDashboard(App[None]):
             start_new_session=True,
         )
 
-    def _spawn_replay(self, entry_id: str) -> None:
+    def _spawn_replay(self, entry_id: str, *, all_folders: bool = False) -> None:
+        command = [
+            sys.executable,
+            "-m",
+            "ailoop.cli",
+            "--quiet",
+            "--config",
+            str(self.config_path),
+            "replay",
+            entry_id,
+        ]
+        if all_folders:
+            command.append("--all-folders")
         subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "ailoop.cli",
-                "--quiet",
-                "--config",
-                str(self.config_path),
-                "replay",
-                entry_id,
-            ],
+            command,
             cwd=self._spawn_cwd(),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -3166,7 +3310,7 @@ class LoopDashboard(App[None]):
             return
         self.memory_archive_armed = False
         self.memory_delete_armed = False
-        self._spawn_replay(entry.id)
+        self._spawn_replay(entry.id, all_folders=self.memory_all_folders)
         self.notify(f"replay sent: {entry.id}")
         self.refresh_data()
 
@@ -3324,7 +3468,75 @@ class LoopDashboard(App[None]):
         self.notify(f"loop started: {created.loop_id}")
         self.refresh_data()
 
+    def _move_loop_selection(self, delta: int) -> None:
+        if self._text_input_has_focus():
+            return
+        states = self._filtered_loops()
+        if not states:
+            return
+        selected = self.selected_loop_id
+        index = 0
+        if selected:
+            for idx, item in enumerate(states):
+                if item.loop_id == selected:
+                    index = idx
+                    break
+        index = (index + delta) % len(states)
+        self.selected_loop_id = states[index].loop_id
+        self._draft_loop_selected = False
+        self.refresh_data()
+
+    def action_loop_next(self) -> None:
+        self._move_loop_selection(1)
+
+    def action_loop_prev(self) -> None:
+        self._move_loop_selection(-1)
+
+    def action_follow_up_focus(self) -> None:
+        if self.log_kind == "memory":
+            return
+        self.query_one("#follow-up-prompt", TextArea).focus()
+
+    def action_queue_follow_up(self) -> None:
+        state = self._selected_state()
+        if state is None:
+            self.notify("select a loop before queueing a follow-up", severity="warning")
+            return
+        follow_up = self._follow_up_text()
+        if not follow_up:
+            self.notify("follow-up prompt is empty", severity="warning")
+            return
+        if not self._can_queue_follow_up(state):
+            self.notify("follow-up queueing is not available for this loop", severity="warning")
+            return
+        state = self.service.queue_follow_up(state.loop_id, follow_up)
+        self.query_one("#follow-up-prompt", TextArea).text = ""
+        if (
+            state.status in {"idle", "paused", "stopped", "failed"}
+            and self._can_next_iteration(state)
+        ):
+            self.service.request_single_iteration(state.loop_id)
+            self._spawn_resume(state.loop_id)
+            self.notify(f"follow-up queued and next iteration started: {state.loop_id}")
+        else:
+            self.notify(f"follow-up queued: {state.loop_id}")
+        self.refresh_data()
+
+    def action_clear_follow_up(self) -> None:
+        state = self._selected_state()
+        if state is None or not state.queued_follow_up:
+            self.notify("no queued follow-up to clear", severity="warning")
+            return
+        if state.pending_single_iteration or self.service.store.is_locked(state.loop_id):
+            self.notify("follow-up is already committed to the next iteration", severity="warning")
+            return
+        self.service.clear_follow_up(state.loop_id)
+        self.notify(f"queued follow-up cleared: {state.loop_id}")
+        self.refresh_data()
+
     def action_next_iteration(self) -> None:
+        if self._text_input_has_focus():
+            return
         state = self._selected_state()
         if state is None:
             self.notify("select a loop before queueing the next iteration", severity="warning")

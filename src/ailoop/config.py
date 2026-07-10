@@ -201,6 +201,10 @@ def resolve_run_config(
     agent_file: str | None = None,
     task_file: str | None = None,
     stop_when_tasks_complete: bool | None = None,
+    workspace_root: str | None = None,
+    workspace_history_enabled: bool | None = None,
+    workspace_history_limit: int | None = None,
+    workspace_history_chars: int | None = None,
 ) -> LoopRunConfig:
     selected_runner = runner or app_config.default_runner
     if selected_runner not in app_config.runners:
@@ -247,6 +251,12 @@ def resolve_run_config(
         runner_command=runner_config.command,
         runner_args=runner_config.args,
         runner_env=runner_config.env,
+        workspace_root=str(expand_path(workspace_root)) if workspace_root else None,
+        workspace_history_enabled=(
+            workspace_history_enabled if workspace_history_enabled is not None else True
+        ),
+        workspace_history_limit=workspace_history_limit or 5,
+        workspace_history_chars=workspace_history_chars or 1200,
     )
 
 
