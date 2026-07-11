@@ -3440,13 +3440,39 @@ def test_invalid_workspace_root_is_not_saved_or_started(tmp_path: Path) -> None:
         messages: list[str] = []
         app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
         async with app.run_test() as pilot:
+            await pilot.pause()
             app.query_one("#workspace-root").value = str(invalid_root)
+            app._update_workspace_root_status()
+            assert (
+                str(app.query_one("#workspace-root-status").render())
+                == "⚠ Workspace must be an existing directory"
+            )
             app.action_run_loop()
             await pilot.pause()
             assert service.list_loops() == []
             assert messages == [
                 f"workspace root must be an existing directory: {invalid_root}"
             ]
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_workspace_root_status_updates_for_valid_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = LoopService(tmp_path / "state", emit_output=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#workspace-root").value = str(workspace)
+            app._update_workspace_root_status()
+            assert str(app.query_one("#workspace-root-status").render()) == (
+                "✓ Valid workspace — runner cwd"
+            )
 
     import asyncio
 

@@ -1069,6 +1069,11 @@ class LoopDashboard(App[None]):
                         yield Static("WORKSPACE & SCOPE", classes="panel-title")
                         yield Static("Root directory", classes="section-title")
                         yield Input(workspace_defaults["root"], id="workspace-root")
+                        yield Static(
+                            "Enter an existing directory",
+                            id="workspace-root-status",
+                            classes="mini-note",
+                        )
                         yield Static("Recent workspace", classes="section-title")
                         yield Select(
                             recent_workspace_options,
@@ -1314,6 +1319,7 @@ class LoopDashboard(App[None]):
         table.add_columns("Loop", "Status", "Iter", "Mode", "Agent")
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
+        self._update_workspace_root_status()
 
     def on_resize(self, event: events.Resize) -> None:
         self._sync_layout_mode(event.size.width)
@@ -1381,6 +1387,7 @@ class LoopDashboard(App[None]):
         try:
             normalized_root = self.service._normalize_workspace_root(entered_root)
         except FileNotFoundError:
+            self._update_workspace_root_status(entered_root)
             workspace_root.focus()
             self.notify(
                 f"workspace root must be an existing directory: {entered_root}",
@@ -1389,7 +1396,29 @@ class LoopDashboard(App[None]):
             return False
         if normalized_root is not None:
             workspace_root.value = normalized_root
+        self._update_workspace_root_status(workspace_root.value)
         return True
+
+    def _update_workspace_root_status(self, root: str | None = None) -> None:
+        try:
+            status = self.query_one("#workspace-root-status", Static)
+            entered_root = (
+                root if root is not None else self.query_one("#workspace-root", Input).value
+            )
+        except ScreenStackError:
+            return
+        if not entered_root.strip():
+            status.update("Enter an existing directory")
+            return
+        try:
+            normalized_root = self.service._normalize_workspace_root(entered_root)
+        except FileNotFoundError:
+            status.update("⚠ Workspace must be an existing directory")
+            return
+        if normalized_root and normalized_root != entered_root:
+            status.update(f"✓ Valid workspace — runner cwd: {normalized_root}")
+            return
+        status.update("✓ Valid workspace — runner cwd")
 
     def _state_mode_and_schedule(self, state: object | None) -> tuple[str, str, str]:
         if state is not None:
@@ -3099,10 +3128,13 @@ class LoopDashboard(App[None]):
     @on(Input.Changed, "#workspace-root")
     def on_workspace_root_changed(self, event: Input.Changed) -> None:
         root = event.value.strip()
+        if root != self.query_one("#workspace-root", Input).value.strip():
+            return
         if root:
             picker = self.query_one("#workspace-recent", Select)
             picker.set_options(self._recent_workspace_options(root))
             picker.value = root
+        self._update_workspace_root_status(root)
         self._refresh_workspace_branch()
         self._render_selected()
 
