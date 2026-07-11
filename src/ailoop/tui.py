@@ -632,6 +632,14 @@ class LoopDashboard(App[None]):
         margin-top: 1;
     }
 
+    #workspace-root-status.root-valid {
+        color: #6ddf9d;
+    }
+
+    #workspace-root-status.root-invalid {
+        color: #ffb86c;
+    }
+
     .detail-preview-hidden {
         display: none;
     }
@@ -1409,12 +1417,18 @@ class LoopDashboard(App[None]):
             return
         if not entered_root.strip():
             status.update("Enter an existing directory")
+            status.set_class(False, "root-valid")
+            status.set_class(False, "root-invalid")
             return
         try:
             normalized_root = self.service._normalize_workspace_root(entered_root)
         except FileNotFoundError:
             status.update("⚠ Workspace must be an existing directory")
+            status.set_class(False, "root-valid")
+            status.set_class(True, "root-invalid")
             return
+        status.set_class(True, "root-valid")
+        status.set_class(False, "root-invalid")
         if normalized_root and normalized_root != entered_root:
             status.update(f"✓ Valid workspace — runner cwd: {normalized_root}")
             return

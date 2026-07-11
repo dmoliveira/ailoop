@@ -3447,6 +3447,7 @@ def test_invalid_workspace_root_is_not_saved_or_started(tmp_path: Path) -> None:
                 str(app.query_one("#workspace-root-status").render())
                 == "⚠ Workspace must be an existing directory"
             )
+            assert app.query_one("#workspace-root-status").has_class("root-invalid")
             app.action_run_loop()
             await pilot.pause()
             assert service.list_loops() == []
@@ -3461,6 +3462,7 @@ def test_invalid_workspace_root_is_not_saved_or_started(tmp_path: Path) -> None:
 
 def test_workspace_root_status_updates_for_valid_directory(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
+    missing_workspace = tmp_path / "missing-workspace"
     workspace.mkdir()
 
     async def run_test() -> None:
@@ -3473,6 +3475,12 @@ def test_workspace_root_status_updates_for_valid_directory(tmp_path: Path) -> No
             assert str(app.query_one("#workspace-root-status").render()) == (
                 "✓ Valid workspace — runner cwd"
             )
+            assert app.query_one("#workspace-root-status").has_class("root-valid")
+            assert not app.query_one("#workspace-root-status").has_class("root-invalid")
+            app.query_one("#workspace-root").value = str(missing_workspace)
+            app._update_workspace_root_status()
+            assert app.query_one("#workspace-root-status").has_class("root-invalid")
+            assert not app.query_one("#workspace-root-status").has_class("root-valid")
 
     import asyncio
 
