@@ -698,6 +698,63 @@ def test_local_runner_records_oserror_in_stderr_log(tmp_path: Path) -> None:
     assert stderr_log.read_text() == result.stderr
 
 
+def test_inter_iteration_wait_observes_stop_request(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=2,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="wait-stop")
+    sleeps: list[float] = []
+
+    def request_stop(seconds: float) -> None:
+        sleeps.append(seconds)
+        service.request_control(state.loop_id, "stop")
+
+    monkeypatch.setattr("ailoop.service.time.sleep", request_stop)
+
+    assert service._wait_between_iterations(state) is True
+    assert sleeps == [0.25]
+
+
+def test_inter_iteration_wait_observes_pause_request(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=2,
+        pause_seconds=60,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="wait-pause")
+
+    def request_pause(_seconds: float) -> None:
+        service.request_control(state.loop_id, "pause")
+
+    monkeypatch.setattr("ailoop.service.time.sleep", request_pause)
+
+    assert service._wait_between_iterations(state) is True
+
+
 def test_local_runner_times_out_and_marks_result(tmp_path: Path) -> None:
     runner = LocalRunner()
     stdout_log = tmp_path / "stdout.log"

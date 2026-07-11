@@ -18,6 +18,8 @@ from .workspace_history import (
     workspace_prompt_signature,
 )
 
+CONTROL_POLL_SECONDS = 0.25
+
 
 class LoopService:
     def __init__(self, state_root: Path, emit_output: bool = True):
@@ -261,13 +263,27 @@ class LoopService:
                     )
                     return state
                 if self.should_continue(state):
-                    time.sleep(state.run_config.pause_seconds)
+                    if self._wait_between_iterations(state):
+                        state = self.store.load(loop_id)
+                        continue
             state.status = "completed"
             if state.run_config.stop_when_tasks_complete and state.run_config.task_file:
                 state.last_summary = state.last_summary or "task file complete"
             self.store.save(state)
             self.store.append_event(loop_id, {"at": utc_now(), "event": "completed"})
             return state
+
+    def _wait_between_iterations(self, state: LoopState) -> bool:
+        """Wait between iterations while promptly observing pause/stop requests."""
+        deadline = time.monotonic() + state.run_config.pause_seconds
+        while True:
+            latest_state = self.store.load(state.loop_id)
+            if latest_state.control in {"pause", "stop"}:
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            time.sleep(min(CONTROL_POLL_SECONDS, remaining))
 
     def _validate_task_file(self, state: LoopState) -> None:
         if state.run_config.task_file:
