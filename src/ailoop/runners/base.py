@@ -13,3 +13,4 @@ class RunnerResult:
     duration_seconds: float
     stdout_log: Path
     stderr_log: Path
+    timed_out: bool = False

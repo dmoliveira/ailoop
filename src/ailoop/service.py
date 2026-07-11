@@ -336,6 +336,7 @@ class LoopService:
                     if state.run_config.workspace_root
                     else None
                 ),
+                timeout_seconds=state.run_config.iteration_timeout_seconds,
             )
             if result.exit_code == 0:
                 break
@@ -349,6 +350,7 @@ class LoopService:
         iteration.stdout_log = str(result.stdout_log)
         iteration.stderr_log = str(result.stderr_log)
         iteration.summary = summarize_output(result.stdout or result.stderr)
+        iteration.timed_out = result.timed_out
 
         latest_state = self.store.load(state.loop_id)
         state.control = latest_state.control

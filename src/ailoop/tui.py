@@ -1675,6 +1675,7 @@ class LoopDashboard(App[None]):
             agent = self.app_config.default_agent
             continue_on_error = self.app_config.loop.continue_on_error
             retry_count = self.app_config.loop.retry_count
+            iteration_timeout_seconds = self.app_config.loop.iteration_timeout_seconds
             pre_prompt_enabled = self.app_config.prompt.pre_prompt_enabled
             attach_agent_file = self.app_config.prompt.attach_agent_file
             pre_prompt = self.app_config.prompt.pre_prompt
@@ -1698,6 +1699,7 @@ class LoopDashboard(App[None]):
             agent = loop_state.run_config.agent  # type: ignore[attr-defined]
             continue_on_error = loop_state.run_config.continue_on_error  # type: ignore[attr-defined]
             retry_count = loop_state.run_config.retry_count  # type: ignore[attr-defined]
+            iteration_timeout_seconds = loop_state.run_config.iteration_timeout_seconds  # type: ignore[attr-defined]
             pre_prompt_enabled = loop_state.run_config.pre_prompt_enabled  # type: ignore[attr-defined]
             attach_agent_file = loop_state.run_config.attach_agent_file  # type: ignore[attr-defined]
             pre_prompt = loop_state.run_config.pre_prompt  # type: ignore[attr-defined]
@@ -1729,6 +1731,7 @@ class LoopDashboard(App[None]):
             ),
             continue_on_error=continue_on_error,
             retry_count=retry_count,
+            iteration_timeout_seconds=iteration_timeout_seconds,
             pre_prompt_enabled=pre_prompt_enabled,
             attach_agent_file=attach_agent_file,
             pre_prompt=pre_prompt,

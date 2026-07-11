@@ -38,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pause_seconds": 30,
         "continue_on_error": True,
         "retry_count": 0,
+        "iteration_timeout_seconds": None,
     },
     "tasks": {
         "file": None,
@@ -145,6 +146,13 @@ def build_app_config(data: dict[str, Any]) -> AppConfig:
         _coerce_int(data["loop"]["retry_count"], "loop.retry_count"),
         "loop.retry_count",
     )
+    loop_iteration_timeout_seconds = _coerce_optional_int(
+        data["loop"].get("iteration_timeout_seconds"), "loop.iteration_timeout_seconds"
+    )
+    if loop_iteration_timeout_seconds is not None:
+        loop_iteration_timeout_seconds = _validate_positive(
+            loop_iteration_timeout_seconds, "loop.iteration_timeout_seconds"
+        )
     tasks_max_doing = _validate_positive(
         _coerce_int(data.get("tasks", {}).get("max_doing", 1), "tasks.max_doing"),
         "tasks.max_doing",
@@ -177,6 +185,7 @@ def build_app_config(data: dict[str, Any]) -> AppConfig:
             pause_seconds=loop_pause_seconds,
             continue_on_error=bool(data["loop"]["continue_on_error"]),
             retry_count=loop_retry_count,
+            iteration_timeout_seconds=loop_iteration_timeout_seconds,
         ),
         tasks=TasksConfig(
             file=str(expand_path(data.get("tasks", {}).get("file")))
@@ -215,6 +224,7 @@ def resolve_run_config(
         pause_seconds if pause_seconds is not None else app_config.loop.pause_seconds
     )
     resolved_retry_count = app_config.loop.retry_count
+    resolved_iteration_timeout_seconds = app_config.loop.iteration_timeout_seconds
     resolved_max_doing = app_config.tasks.max_doing
 
     return LoopRunConfig(
@@ -225,6 +235,7 @@ def resolve_run_config(
         pause_seconds=_validate_non_negative(resolved_pause_seconds, "loop.pause_seconds"),
         continue_on_error=app_config.loop.continue_on_error,
         retry_count=_validate_non_negative(resolved_retry_count, "loop.retry_count"),
+        iteration_timeout_seconds=resolved_iteration_timeout_seconds,
         pre_prompt_enabled=(
             pre_prompt_enabled
             if pre_prompt_enabled is not None
