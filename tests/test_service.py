@@ -696,3 +696,23 @@ def test_local_runner_records_oserror_in_stderr_log(tmp_path: Path) -> None:
     assert result.exit_code == 127
     assert stdout_log.read_text() == ""
     assert stderr_log.read_text() == result.stderr
+
+
+def test_local_runner_times_out_and_marks_result(tmp_path: Path) -> None:
+    runner = LocalRunner()
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+
+    result = runner.run(
+        command="python3",
+        args=["-c", "import time; time.sleep(30)"],
+        env={},
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+        timeout_seconds=1,
+    )
+
+    assert result.timed_out is True
+    assert result.exit_code != 0
+    assert "runner timed out after 1 seconds" in stderr_log.read_text()
+    assert result.duration_seconds < 7

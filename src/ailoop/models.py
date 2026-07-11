@@ -40,6 +40,7 @@ class LoopConfig:
     pause_seconds: int
     continue_on_error: bool
     retry_count: int
+    iteration_timeout_seconds: int | None = None
 
 
 @dataclass(slots=True)
@@ -75,6 +76,7 @@ class LoopRunConfig:
     agent_file: str | None
     runner_command: str
     runner_args: list[str]
+    iteration_timeout_seconds: int | None = None
     runner_env: dict[str, str] = field(default_factory=dict)
     task_file: str | None = None
     stop_when_tasks_complete: bool = False
@@ -100,6 +102,7 @@ class IterationRecord:
     stderr_log: str | None = None
     prompt_file: str | None = None
     summary: str | None = None
+    timed_out: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
