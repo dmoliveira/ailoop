@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 from collections.abc import Iterator
@@ -46,6 +47,17 @@ class StateStore:
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
         return sorted(states, key=lambda item: item.updated_at, reverse=True)
+
+    @contextmanager
+    def acquire_mutation_lock(self, loop_id: str) -> Iterator[None]:
+        path = state_file(self.state_root, loop_id).with_suffix(".mutation.lock")
+        ensure_dir(path.parent)
+        with path.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def is_locked(self, loop_id: str) -> bool:
         path = lock_file(self.state_root, loop_id)

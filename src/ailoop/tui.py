@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from textual import events, on
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Checkbox, DataTable, Header, Input, Select, Static, TextArea
@@ -632,6 +632,18 @@ class LoopDashboard(App[None]):
         margin-top: 1;
     }
 
+    #workspace-root-status.root-valid {
+        color: #6ddf9d;
+    }
+
+    #workspace-root-status.root-invalid {
+        color: #ffb86c;
+    }
+
+    #workspace-root.root-invalid {
+        border: tall #ffb86c;
+    }
+
     .detail-preview-hidden {
         display: none;
     }
@@ -780,19 +792,20 @@ class LoopDashboard(App[None]):
         return isinstance(focused, Input | TextArea)
 
     def _active_workspace_root(self, state: object | None = None) -> Path | None:
+        if self.is_mounted:
+            try:
+                root_text = self.query_one("#workspace-root", Input).value.strip()
+            except Exception:
+                root_text = ""
+            if root_text:
+                try:
+                    return Path(root_text).expanduser().resolve()
+                except FileNotFoundError:
+                    return self.launch_cwd
         loop_state = state or self._selected_state()
         if loop_state is not None and getattr(loop_state.run_config, "workspace_root", None):  # type: ignore[attr-defined]
             return Path(loop_state.run_config.workspace_root)  # type: ignore[attr-defined]
-        root_text = self._input_value(
-            "#workspace-root",
-            str(self.launch_cwd or Path.home()),
-        ).strip()
-        if not root_text:
-            return self.launch_cwd
-        try:
-            return Path(root_text).expanduser().resolve()
-        except Exception:
-            return self.launch_cwd
+        return self.launch_cwd
 
     def _follow_up_text(self) -> str:
         return self.query_one("#follow-up-prompt", TextArea).text.strip()
@@ -888,9 +901,16 @@ class LoopDashboard(App[None]):
             "notify_email": False,
         }
 
+    def _recent_workspace_options(self, default_root: str) -> list[tuple[str, str]]:
+        roots = [default_root, *self.service.workspace_history.recent_workspace_roots()]
+        unique_roots = list(dict.fromkeys(roots))
+        return [(root, root) for root in unique_roots]
+
     def _workspace_form_defaults(self) -> dict[str, str]:
+        fallback_root = str(self.launch_cwd or Path.home())
+        recent_roots = self.service.workspace_history.recent_workspace_roots(limit=1)
         return {
-            "root": str(self.launch_cwd or Path.home()),
+            "root": recent_roots[0] if recent_roots else fallback_root,
             "include": "src/**\ntests/**\ndocs/**",
             "exclude": ".git/**\n.venv/**\n.ailoop/**\nnode_modules/**",
         }
@@ -945,6 +965,7 @@ class LoopDashboard(App[None]):
     def compose(self) -> ComposeResult:
         defaults = self._config_form_defaults()
         workspace_defaults = self._workspace_form_defaults()
+        recent_workspace_options = self._recent_workspace_options(workspace_defaults["root"])
         yield Header(show_clock=True)
         yield Static("loading...", id="summary_bar")
         with Horizontal(id="main"):
@@ -1060,6 +1081,22 @@ class LoopDashboard(App[None]):
                         yield Static("WORKSPACE & SCOPE", classes="panel-title")
                         yield Static("Root directory", classes="section-title")
                         yield Input(workspace_defaults["root"], id="workspace-root")
+                        yield Static(
+                            "Enter an existing directory",
+                            id="workspace-root-status",
+                            classes="mini-note",
+                        )
+                        yield Static("Recent workspace", classes="section-title")
+                        yield Select(
+                            recent_workspace_options,
+                            value=workspace_defaults["root"],
+                            id="workspace-recent",
+                        )
+                        yield Static(
+                            "Root is enforced as runner cwd. Other scope/safety settings "
+                            "are saved planning metadata.",
+                            classes="mini-note",
+                        )
                         with Horizontal(classes="form-row"):
                             with Vertical(classes="field-group"):
                                 yield Static("Current branch", classes="section-title")
@@ -1079,6 +1116,12 @@ class LoopDashboard(App[None]):
                         yield TextArea(workspace_defaults["include"], id="workspace-include")
                         yield Static("Excluded paths", classes="section-title")
                         yield TextArea(workspace_defaults["exclude"], id="workspace-exclude")
+                        yield Static(
+                            "Include/exclude are saved workspace guidance; only the root directory "
+                            "is enforced as the runner's working directory.",
+                            id="workspace-guidance",
+                            classes="mini-note",
+                        )
                         yield Static(id="workspace_scope", classes="mini-note")
                 with Vertical(id="log_card", classes="card"):
                     yield Static("LOGS & OBSERVABILITY", classes="panel-title")
@@ -1294,6 +1337,7 @@ class LoopDashboard(App[None]):
         table.add_columns("Loop", "Status", "Iter", "Mode", "Agent")
         self.set_interval(1.0, self.refresh_data)
         self.refresh_data()
+        self._update_workspace_root_status()
 
     def on_resize(self, event: events.Resize) -> None:
         self._sync_layout_mode(event.size.width)
@@ -1349,6 +1393,58 @@ class LoopDashboard(App[None]):
         if mode == "scheduled":
             return True
         return self._config_interval_value() in {"continuous", "minutes", "hours"}
+
+    def _validate_workspace_root(self) -> bool:
+        """Keep invalid workspace paths out of persisted state and runner spawns."""
+        try:
+            workspace_root = self.query_one("#workspace-root", Input)
+        except ScreenStackError:
+            # Programmatic action tests and non-UI callers have no form to validate.
+            return True
+        entered_root = workspace_root.value
+        try:
+            normalized_root = self.service._normalize_workspace_root(entered_root)
+        except FileNotFoundError:
+            self._update_workspace_root_status(entered_root)
+            workspace_root.focus()
+            self.notify(
+                f"workspace root must be an existing directory: {entered_root}",
+                severity="warning",
+            )
+            return False
+        if normalized_root is not None:
+            workspace_root.value = normalized_root
+        self._update_workspace_root_status(workspace_root.value)
+        return True
+
+    def _update_workspace_root_status(self, root: str | None = None) -> None:
+        try:
+            status = self.query_one("#workspace-root-status", Static)
+            workspace_root = self.query_one("#workspace-root", Input)
+            entered_root = root if root is not None else workspace_root.value
+        except ScreenStackError:
+            return
+        if not entered_root.strip():
+            status.update("Enter an existing directory")
+            status.set_class(False, "root-valid")
+            status.set_class(False, "root-invalid")
+            workspace_root.set_class(False, "root-invalid")
+            return
+        try:
+            normalized_root = self.service._normalize_workspace_root(entered_root)
+        except FileNotFoundError:
+            status.update("⚠ Workspace must be an existing directory")
+            status.set_class(False, "root-valid")
+            status.set_class(True, "root-invalid")
+            workspace_root.set_class(True, "root-invalid")
+            return
+        status.set_class(True, "root-valid")
+        status.set_class(False, "root-invalid")
+        workspace_root.set_class(False, "root-invalid")
+        if normalized_root and normalized_root != entered_root:
+            status.update(f"✓ Valid workspace — runner cwd: {normalized_root}")
+            return
+        status.update("✓ Valid workspace — runner cwd")
 
     def _state_mode_and_schedule(self, state: object | None) -> tuple[str, str, str]:
         if state is not None:
@@ -1522,6 +1618,9 @@ class LoopDashboard(App[None]):
         set_checkbox("#config-jitter", values["jitter"])
         set_input("#config-jitter-value", values["jitter_value"])
         set_input("#workspace-root", workspace_values["root"])
+        workspace_recent = self.query_one("#workspace-recent", Select)
+        workspace_recent.set_options(self._recent_workspace_options(str(workspace_values["root"])))
+        workspace_recent.value = str(workspace_values["root"])
         self.query_one("#workspace-include", TextArea).text = str(workspace_values["include"])
         self.query_one("#workspace-exclude", TextArea).text = str(workspace_values["exclude"])
         follow_up_text = (
@@ -2897,9 +2996,9 @@ class LoopDashboard(App[None]):
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
-        self._refresh_workspace_branch(state)
         if modern_layout:
             self._sync_config_form_from_state(state)
+        self._refresh_workspace_branch(state)
         self._render_summary_bar()
         if modern_layout:
             loop_summary.update(self._loop_summary_text(state))
@@ -3035,8 +3134,33 @@ class LoopDashboard(App[None]):
         self.delete_armed = False
         self.refresh_data()
 
+    @on(Select.Changed, "#workspace-recent")
+    def on_recent_workspace_changed(self, event: Select.Changed) -> None:
+        if event.value == Select.NULL:
+            return
+        root = str(event.value)
+        if not root:
+            return
+        try:
+            picker = self.query_one("#workspace-recent", Select)
+            if str(picker.value) != root:
+                return
+            self.query_one("#workspace-root", Input).value = root
+        except Exception:
+            return
+        self._refresh_workspace_branch()
+        self._render_selected()
+
     @on(Input.Changed, "#workspace-root")
-    def on_workspace_root_changed(self, _event: Input.Changed) -> None:
+    def on_workspace_root_changed(self, event: Input.Changed) -> None:
+        root = event.value.strip()
+        if root != self.query_one("#workspace-root", Input).value.strip():
+            return
+        if root:
+            picker = self.query_one("#workspace-recent", Select)
+            picker.set_options(self._recent_workspace_options(root))
+            picker.value = root
+        self._update_workspace_root_status(root)
         self._refresh_workspace_branch()
         self._render_selected()
 
@@ -3382,6 +3506,8 @@ class LoopDashboard(App[None]):
             self.delete_armed = False
             state = self._selected_state()
             if state is not None:
+                if not self._validate_workspace_root():
+                    return
                 if self._state_mode_and_schedule(state)[0] == "scheduled":
                     self.notify(
                         "scheduled loops wait for their configured run window",
@@ -3409,6 +3535,8 @@ class LoopDashboard(App[None]):
             self.refresh_data()
 
     def action_save_config(self) -> None:
+        if not self._validate_workspace_root():
+            return
         state = self._selected_state()
         if state is None:
             self.notify("config draft captured in the form")
@@ -3429,6 +3557,8 @@ class LoopDashboard(App[None]):
     def action_run_loop(self) -> None:
         if not self._form_supports_run():
             self.notify("current loop configuration cannot run yet", severity="warning")
+            return
+        if not self._validate_workspace_root():
             return
         mode = self._config_mode_value()
         state = self._selected_state()
@@ -3509,13 +3639,12 @@ class LoopDashboard(App[None]):
         if not self._can_queue_follow_up(state):
             self.notify("follow-up queueing is not available for this loop", severity="warning")
             return
-        state = self.service.queue_follow_up(state.loop_id, follow_up)
+        run_next = state.status in {"idle", "paused", "stopped", "failed"}
+        if run_next and not self._validate_workspace_root():
+            return
+        state = self.service.queue_follow_up(state.loop_id, follow_up, run_next=run_next)
         self.query_one("#follow-up-prompt", TextArea).text = ""
-        if (
-            state.status in {"idle", "paused", "stopped", "failed"}
-            and self._can_next_iteration(state)
-        ):
-            self.service.request_single_iteration(state.loop_id)
+        if state.pending_single_iteration:
             self._spawn_resume(state.loop_id)
             self.notify(f"follow-up queued and next iteration started: {state.loop_id}")
         else:
@@ -3544,6 +3673,8 @@ class LoopDashboard(App[None]):
         if not self._can_next_iteration(state):
             self.notify("next iteration is not available right now", severity="warning")
             return
+        if not self._validate_workspace_root():
+            return
         self.service.request_single_iteration(state.loop_id)  # type: ignore[attr-defined]
         self._spawn_resume(state.loop_id)  # type: ignore[attr-defined]
         self.notify(f"next iteration queued: {state.loop_id}")  # type: ignore[attr-defined]
@@ -3552,6 +3683,8 @@ class LoopDashboard(App[None]):
     def action_restart_selected(self) -> None:
         state = self._selected_state()
         if state is None:
+            return
+        if not self._validate_workspace_root():
             return
         state.run_config = self._build_run_config_from_form(state)
         state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
@@ -3568,6 +3701,8 @@ class LoopDashboard(App[None]):
     def action_restart_reset_selected(self) -> None:
         state = self._selected_state()
         if state is None:
+            return
+        if not self._validate_workspace_root():
             return
         state.run_config = self._build_run_config_from_form(state)
         state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]

@@ -3430,6 +3430,72 @@ def test_existing_loop_uses_edited_workspace_root(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
+def test_invalid_workspace_root_is_not_saved_or_started(tmp_path: Path) -> None:
+    invalid_root = tmp_path / "missing-workspace"
+    service = LoopService(tmp_path / "state", emit_output=False)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        messages: list[str] = []
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#workspace-root").value = str(invalid_root)
+            app._update_workspace_root_status()
+            assert (
+                str(app.query_one("#workspace-root-status").render())
+                == "⚠ Workspace must be an existing directory"
+            )
+            assert app.query_one("#workspace-root-status").has_class("root-invalid")
+            assert app.query_one("#workspace-root").has_class("root-invalid")
+            app.action_run_loop()
+            await pilot.pause()
+            assert service.list_loops() == []
+            assert messages == [
+                f"workspace root must be an existing directory: {invalid_root}"
+            ]
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_workspace_root_status_updates_for_valid_directory(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    missing_workspace = tmp_path / "missing-workspace"
+    workspace.mkdir()
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = LoopService(tmp_path / "state", emit_output=False)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert str(app.query_one("#workspace-guidance").render()) == (
+                "Include/exclude are saved workspace guidance; only the root directory "
+                "is enforced as the runner's working directory."
+            )
+            app.query_one("#workspace-root").value = str(workspace)
+            app._update_workspace_root_status()
+            assert str(app.query_one("#workspace-root-status").render()) == (
+                "✓ Valid workspace — runner cwd"
+            )
+            assert app.query_one("#workspace-root-status").has_class("root-valid")
+            assert not app.query_one("#workspace-root-status").has_class("root-invalid")
+            app.query_one("#workspace-root").value = str(missing_workspace)
+            app._update_workspace_root_status()
+            assert app.query_one("#workspace-root-status").has_class("root-invalid")
+            assert not app.query_one("#workspace-root-status").has_class("root-valid")
+            assert app.query_one("#workspace-root").has_class("root-invalid")
+            app.query_one("#workspace-root").value = str(workspace)
+            app._update_workspace_root_status()
+            assert not app.query_one("#workspace-root").has_class("root-invalid")
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_mounted_workspace_root_edit_survives_rerender(tmp_path: Path) -> None:
     old_root = tmp_path / "old-workspace"
     new_root = tmp_path / "new-workspace"
@@ -3511,6 +3577,97 @@ def test_ctrl_enter_queues_follow_up_from_mounted_textarea(tmp_path: Path) -> No
             updated = service.load_loop(state.loop_id)
             assert updated.queued_follow_up == "run the next focused review"
             assert updated.pending_single_iteration is True
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_recent_workspace_picker_updates_root(tmp_path: Path) -> None:
+    from ailoop.workspace_history import WorkspaceHistoryStore
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    history = WorkspaceHistoryStore(tmp_path / "state")
+    config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+        workspace_root=str(second),
+    )
+    history.append_prompt("loop", config)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = LoopService(tmp_path / "state", emit_output=False)
+        app._detect_branch_for = lambda root: f"branch-{root.name}" if root else "-"  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.query_one("#workspace-recent").value = str(second.resolve())
+            await pilot.pause()
+            assert app.query_one("#workspace-root").value == str(second.resolve())
+            assert str(app.query_one("#workspace-current-branch").render()) == "branch-second"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) -> None:
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    service = LoopService(tmp_path / "state")
+
+    def make_config(root: Path) -> LoopRunConfig:
+        return LoopRunConfig(
+            prompt="hello",
+            runner="echo",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=["-c", "print('ok')"],
+            workspace_root=str(root),
+        )
+
+    first_state = service.create_loop(make_config(first), loop_id="first-loop")
+    second_state = service.create_loop(make_config(second), loop_id="second-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=first_state.loop_id,
+        )
+        app.service = service
+        app._detect_branch_for = lambda root: f"branch-{root.name}" if root else "-"  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            assert str(app.query_one("#workspace-current-branch").render()) == "branch-first"
+            app.selected_loop_id = second_state.loop_id
+            app._config_bound_loop_id = None
+            app.refresh_data()
+            await pilot.pause()
+            assert str(app.query_one("#workspace-current-branch").render()) == "branch-second"
 
     import asyncio
 

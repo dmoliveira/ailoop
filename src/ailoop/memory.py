@@ -4,7 +4,7 @@ import getpass
 import hashlib
 import json
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
 
@@ -13,6 +13,11 @@ from .models import AppConfig, LoopRunConfig, utc_now
 from .paths import ensure_dir
 
 MemoryKind = Literal["preset", "history"]
+
+
+def _known_fields(cls: type, data: dict[str, Any]) -> dict[str, Any]:
+    names = {item.name for item in fields(cls)}
+    return {name: value for name, value in data.items() if name in names}
 
 
 @dataclass(slots=True)
@@ -83,9 +88,12 @@ class MemoryEntry:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> MemoryEntry:
-        scope = MemoryScope(**data["scope"])
-        current = VersionSnapshot(**data["current"])
-        versions = [VersionSnapshot(**item) for item in data["versions"]]
+        scope = MemoryScope(**_known_fields(MemoryScope, data["scope"]))
+        current = VersionSnapshot(**_known_fields(VersionSnapshot, data["current"]))
+        versions = [
+            VersionSnapshot(**_known_fields(VersionSnapshot, item))
+            for item in data["versions"]
+        ]
         return cls(
             id=data["id"],
             kind=data["kind"],
