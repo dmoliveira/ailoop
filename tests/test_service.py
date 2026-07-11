@@ -773,3 +773,23 @@ def test_local_runner_times_out_and_marks_result(tmp_path: Path) -> None:
     assert result.exit_code != 0
     assert "runner timed out after 1 seconds" in stderr_log.read_text()
     assert result.duration_seconds < 7
+
+
+def test_local_runner_stops_when_control_requests_stop(tmp_path: Path) -> None:
+    runner = LocalRunner()
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+
+    result = runner.run(
+        command="python3",
+        args=["-c", "import time; time.sleep(30)"],
+        env={},
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+        should_stop=lambda: True,
+    )
+
+    assert result.cancelled is True
+    assert result.timed_out is False
+    assert "runner stopped by loop control" in stderr_log.read_text()
+    assert result.duration_seconds < 7

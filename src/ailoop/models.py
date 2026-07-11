@@ -103,6 +103,7 @@ class IterationRecord:
     prompt_file: str | None = None
     summary: str | None = None
     timed_out: bool = False
+    cancelled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

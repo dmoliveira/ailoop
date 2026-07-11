@@ -353,8 +353,9 @@ class LoopService:
                     else None
                 ),
                 timeout_seconds=state.run_config.iteration_timeout_seconds,
+                should_stop=lambda: self.store.load(state.loop_id).control == "stop",
             )
-            if result.exit_code == 0:
+            if result.exit_code == 0 or result.timed_out or result.cancelled:
                 break
             attempt += 1
 
@@ -367,6 +368,7 @@ class LoopService:
         iteration.stderr_log = str(result.stderr_log)
         iteration.summary = summarize_output(result.stdout or result.stderr)
         iteration.timed_out = result.timed_out
+        iteration.cancelled = result.cancelled
 
         latest_state = self.store.load(state.loop_id)
         state.control = latest_state.control

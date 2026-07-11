@@ -14,3 +14,4 @@ class RunnerResult:
     stdout_log: Path
     stderr_log: Path
     timed_out: bool = False
+    cancelled: bool = False
