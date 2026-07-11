@@ -640,6 +640,10 @@ class LoopDashboard(App[None]):
         color: #ffb86c;
     }
 
+    #workspace-root.root-invalid {
+        border: tall #ffb86c;
+    }
+
     .detail-preview-hidden {
         display: none;
     }
@@ -1410,15 +1414,15 @@ class LoopDashboard(App[None]):
     def _update_workspace_root_status(self, root: str | None = None) -> None:
         try:
             status = self.query_one("#workspace-root-status", Static)
-            entered_root = (
-                root if root is not None else self.query_one("#workspace-root", Input).value
-            )
+            workspace_root = self.query_one("#workspace-root", Input)
+            entered_root = root if root is not None else workspace_root.value
         except ScreenStackError:
             return
         if not entered_root.strip():
             status.update("Enter an existing directory")
             status.set_class(False, "root-valid")
             status.set_class(False, "root-invalid")
+            workspace_root.set_class(False, "root-invalid")
             return
         try:
             normalized_root = self.service._normalize_workspace_root(entered_root)
@@ -1426,9 +1430,11 @@ class LoopDashboard(App[None]):
             status.update("⚠ Workspace must be an existing directory")
             status.set_class(False, "root-valid")
             status.set_class(True, "root-invalid")
+            workspace_root.set_class(True, "root-invalid")
             return
         status.set_class(True, "root-valid")
         status.set_class(False, "root-invalid")
+        workspace_root.set_class(False, "root-invalid")
         if normalized_root and normalized_root != entered_root:
             status.update(f"✓ Valid workspace — runner cwd: {normalized_root}")
             return
