@@ -1116,6 +1116,12 @@ class LoopDashboard(App[None]):
                         yield TextArea(workspace_defaults["include"], id="workspace-include")
                         yield Static("Excluded paths", classes="section-title")
                         yield TextArea(workspace_defaults["exclude"], id="workspace-exclude")
+                        yield Static(
+                            "Include/exclude are saved workspace guidance; only the root directory "
+                            "is enforced as the runner's working directory.",
+                            id="workspace-guidance",
+                            classes="mini-note",
+                        )
                         yield Static(id="workspace_scope", classes="mini-note")
                 with Vertical(id="log_card", classes="card"):
                     yield Static("LOGS & OBSERVABILITY", classes="panel-title")

@@ -3471,6 +3471,10 @@ def test_workspace_root_status_updates_for_valid_directory(tmp_path: Path) -> No
         app.service = LoopService(tmp_path / "state", emit_output=False)
         async with app.run_test() as pilot:
             await pilot.pause()
+            assert str(app.query_one("#workspace-guidance").render()) == (
+                "Include/exclude are saved workspace guidance; only the root directory "
+                "is enforced as the runner's working directory."
+            )
             app.query_one("#workspace-root").value = str(workspace)
             app._update_workspace_root_status()
             assert str(app.query_one("#workspace-root-status").render()) == (
