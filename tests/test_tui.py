@@ -3430,6 +3430,29 @@ def test_existing_loop_uses_edited_workspace_root(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
+def test_invalid_workspace_root_is_not_saved_or_started(tmp_path: Path) -> None:
+    invalid_root = tmp_path / "missing-workspace"
+    service = LoopService(tmp_path / "state", emit_output=False)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        messages: list[str] = []
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.query_one("#workspace-root").value = str(invalid_root)
+            app.action_run_loop()
+            await pilot.pause()
+            assert service.list_loops() == []
+            assert messages == [
+                f"workspace root must be an existing directory: {invalid_root}"
+            ]
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_mounted_workspace_root_edit_survives_rerender(tmp_path: Path) -> None:
     old_root = tmp_path / "old-workspace"
     new_root = tmp_path / "new-workspace"

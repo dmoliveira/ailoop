@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from textual import events, on
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, ScreenStackError
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Checkbox, DataTable, Header, Input, Select, Static, TextArea
@@ -1369,6 +1369,27 @@ class LoopDashboard(App[None]):
         if mode == "scheduled":
             return True
         return self._config_interval_value() in {"continuous", "minutes", "hours"}
+
+    def _validate_workspace_root(self) -> bool:
+        """Keep invalid workspace paths out of persisted state and runner spawns."""
+        try:
+            workspace_root = self.query_one("#workspace-root", Input)
+        except ScreenStackError:
+            # Programmatic action tests and non-UI callers have no form to validate.
+            return True
+        entered_root = workspace_root.value
+        try:
+            normalized_root = self.service._normalize_workspace_root(entered_root)
+        except FileNotFoundError:
+            workspace_root.focus()
+            self.notify(
+                f"workspace root must be an existing directory: {entered_root}",
+                severity="warning",
+            )
+            return False
+        if normalized_root is not None:
+            workspace_root.value = normalized_root
+        return True
 
     def _state_mode_and_schedule(self, state: object | None) -> tuple[str, str, str]:
         if state is not None:
@@ -3427,6 +3448,8 @@ class LoopDashboard(App[None]):
             self.delete_armed = False
             state = self._selected_state()
             if state is not None:
+                if not self._validate_workspace_root():
+                    return
                 if self._state_mode_and_schedule(state)[0] == "scheduled":
                     self.notify(
                         "scheduled loops wait for their configured run window",
@@ -3454,6 +3477,8 @@ class LoopDashboard(App[None]):
             self.refresh_data()
 
     def action_save_config(self) -> None:
+        if not self._validate_workspace_root():
+            return
         state = self._selected_state()
         if state is None:
             self.notify("config draft captured in the form")
@@ -3474,6 +3499,8 @@ class LoopDashboard(App[None]):
     def action_run_loop(self) -> None:
         if not self._form_supports_run():
             self.notify("current loop configuration cannot run yet", severity="warning")
+            return
+        if not self._validate_workspace_root():
             return
         mode = self._config_mode_value()
         state = self._selected_state()
@@ -3555,6 +3582,8 @@ class LoopDashboard(App[None]):
             self.notify("follow-up queueing is not available for this loop", severity="warning")
             return
         run_next = state.status in {"idle", "paused", "stopped", "failed"}
+        if run_next and not self._validate_workspace_root():
+            return
         state = self.service.queue_follow_up(state.loop_id, follow_up, run_next=run_next)
         self.query_one("#follow-up-prompt", TextArea).text = ""
         if state.pending_single_iteration:
@@ -3586,6 +3615,8 @@ class LoopDashboard(App[None]):
         if not self._can_next_iteration(state):
             self.notify("next iteration is not available right now", severity="warning")
             return
+        if not self._validate_workspace_root():
+            return
         self.service.request_single_iteration(state.loop_id)  # type: ignore[attr-defined]
         self._spawn_resume(state.loop_id)  # type: ignore[attr-defined]
         self.notify(f"next iteration queued: {state.loop_id}")  # type: ignore[attr-defined]
@@ -3594,6 +3625,8 @@ class LoopDashboard(App[None]):
     def action_restart_selected(self) -> None:
         state = self._selected_state()
         if state is None:
+            return
+        if not self._validate_workspace_root():
             return
         state.run_config = self._build_run_config_from_form(state)
         state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
@@ -3610,6 +3643,8 @@ class LoopDashboard(App[None]):
     def action_restart_reset_selected(self) -> None:
         state = self._selected_state()
         if state is None:
+            return
+        if not self._validate_workspace_root():
             return
         state.run_config = self._build_run_config_from_form(state)
         state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
