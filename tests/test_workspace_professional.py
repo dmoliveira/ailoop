@@ -94,3 +94,17 @@ def test_workspace_history_entry_ignores_unknown_persisted_fields() -> None:
         }
     )
     assert entry.prompt == "hello"
+
+
+def test_recent_workspace_roots_are_unique_and_most_recent_first(tmp_path: Path) -> None:
+    history = WorkspaceHistoryStore(tmp_path / "state")
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    for root, prompt in ((first, "first"), (second, "second"), (first, "first again")):
+        config = build_run_config()
+        config.workspace_root = str(root)
+        config.prompt = prompt
+        history.append_prompt("loop", config)
+    assert history.recent_workspace_roots() == [str(first.resolve()), str(second.resolve())]

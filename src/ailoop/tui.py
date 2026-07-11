@@ -780,19 +780,20 @@ class LoopDashboard(App[None]):
         return isinstance(focused, Input | TextArea)
 
     def _active_workspace_root(self, state: object | None = None) -> Path | None:
+        if self.is_mounted:
+            try:
+                root_text = self.query_one("#workspace-root", Input).value.strip()
+            except Exception:
+                root_text = ""
+            if root_text:
+                try:
+                    return Path(root_text).expanduser().resolve()
+                except FileNotFoundError:
+                    return self.launch_cwd
         loop_state = state or self._selected_state()
         if loop_state is not None and getattr(loop_state.run_config, "workspace_root", None):  # type: ignore[attr-defined]
             return Path(loop_state.run_config.workspace_root)  # type: ignore[attr-defined]
-        root_text = self._input_value(
-            "#workspace-root",
-            str(self.launch_cwd or Path.home()),
-        ).strip()
-        if not root_text:
-            return self.launch_cwd
-        try:
-            return Path(root_text).expanduser().resolve()
-        except Exception:
-            return self.launch_cwd
+        return self.launch_cwd
 
     def _follow_up_text(self) -> str:
         return self.query_one("#follow-up-prompt", TextArea).text.strip()
@@ -888,9 +889,16 @@ class LoopDashboard(App[None]):
             "notify_email": False,
         }
 
+    def _recent_workspace_options(self, default_root: str) -> list[tuple[str, str]]:
+        roots = [default_root, *self.service.workspace_history.recent_workspace_roots()]
+        unique_roots = list(dict.fromkeys(roots))
+        return [(root, root) for root in unique_roots]
+
     def _workspace_form_defaults(self) -> dict[str, str]:
+        fallback_root = str(self.launch_cwd or Path.home())
+        recent_roots = self.service.workspace_history.recent_workspace_roots(limit=1)
         return {
-            "root": str(self.launch_cwd or Path.home()),
+            "root": recent_roots[0] if recent_roots else fallback_root,
             "include": "src/**\ntests/**\ndocs/**",
             "exclude": ".git/**\n.venv/**\n.ailoop/**\nnode_modules/**",
         }
@@ -945,6 +953,7 @@ class LoopDashboard(App[None]):
     def compose(self) -> ComposeResult:
         defaults = self._config_form_defaults()
         workspace_defaults = self._workspace_form_defaults()
+        recent_workspace_options = self._recent_workspace_options(workspace_defaults["root"])
         yield Header(show_clock=True)
         yield Static("loading...", id="summary_bar")
         with Horizontal(id="main"):
@@ -1060,6 +1069,12 @@ class LoopDashboard(App[None]):
                         yield Static("WORKSPACE & SCOPE", classes="panel-title")
                         yield Static("Root directory", classes="section-title")
                         yield Input(workspace_defaults["root"], id="workspace-root")
+                        yield Static("Recent workspace", classes="section-title")
+                        yield Select(
+                            recent_workspace_options,
+                            value=workspace_defaults["root"],
+                            id="workspace-recent",
+                        )
                         yield Static(
                             "Root is enforced as runner cwd. Other scope/safety settings "
                             "are saved planning metadata.",
@@ -1527,6 +1542,9 @@ class LoopDashboard(App[None]):
         set_checkbox("#config-jitter", values["jitter"])
         set_input("#config-jitter-value", values["jitter_value"])
         set_input("#workspace-root", workspace_values["root"])
+        workspace_recent = self.query_one("#workspace-recent", Select)
+        workspace_recent.set_options(self._recent_workspace_options(str(workspace_values["root"])))
+        workspace_recent.value = str(workspace_values["root"])
         self.query_one("#workspace-include", TextArea).text = str(workspace_values["include"])
         self.query_one("#workspace-exclude", TextArea).text = str(workspace_values["exclude"])
         follow_up_text = (
@@ -2902,9 +2920,9 @@ class LoopDashboard(App[None]):
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
         state = self._selected_state()
-        self._refresh_workspace_branch(state)
         if modern_layout:
             self._sync_config_form_from_state(state)
+        self._refresh_workspace_branch(state)
         self._render_summary_bar()
         if modern_layout:
             loop_summary.update(self._loop_summary_text(state))
@@ -3040,8 +3058,30 @@ class LoopDashboard(App[None]):
         self.delete_armed = False
         self.refresh_data()
 
+    @on(Select.Changed, "#workspace-recent")
+    def on_recent_workspace_changed(self, event: Select.Changed) -> None:
+        if event.value == Select.NULL:
+            return
+        root = str(event.value)
+        if not root:
+            return
+        try:
+            picker = self.query_one("#workspace-recent", Select)
+            if str(picker.value) != root:
+                return
+            self.query_one("#workspace-root", Input).value = root
+        except Exception:
+            return
+        self._refresh_workspace_branch()
+        self._render_selected()
+
     @on(Input.Changed, "#workspace-root")
-    def on_workspace_root_changed(self, _event: Input.Changed) -> None:
+    def on_workspace_root_changed(self, event: Input.Changed) -> None:
+        root = event.value.strip()
+        if root:
+            picker = self.query_one("#workspace-recent", Select)
+            picker.set_options(self._recent_workspace_options(root))
+            picker.value = root
         self._refresh_workspace_branch()
         self._render_selected()
 

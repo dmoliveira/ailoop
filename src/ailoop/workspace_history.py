@@ -123,6 +123,28 @@ class WorkspaceHistoryStore:
             )
         )
 
+    def recent_workspace_roots(self, limit: int = 12) -> list[str]:
+        if limit <= 0:
+            return []
+        roots: list[str] = []
+        history_files = sorted(
+            (self.state_root / "workspaces").glob("*/prompt-history.jsonl"),
+            key=lambda item: item.stat().st_mtime,
+            reverse=True,
+        )
+        for path in history_files:
+            for raw_line in reversed(read_last_lines(path, HISTORY_TAIL_LINES).splitlines()):
+                try:
+                    entry = WorkspaceHistoryEntry.from_dict(json.loads(raw_line))
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if entry.workspace_root not in roots:
+                    roots.append(entry.workspace_root)
+                break
+            if len(roots) >= limit:
+                break
+        return roots
+
     def latest_prompt(self, workspace_root: str | None) -> str | None:
         root = canonical_workspace_root(workspace_root)
         if not root:
