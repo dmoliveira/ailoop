@@ -2,14 +2,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Literal
 
 from .models import IterationRecord, LoopRunConfig, utc_now
-from .paths import ensure_dir, workspace_history_file
+from .paths import ensure_dir, read_last_lines, workspace_history_file
 
 WorkspaceHistoryKind = Literal["prompt", "follow_up", "result"]
+HISTORY_TAIL_LINES = 400
+HISTORY_MAX_BYTES = 2_000_000
+HISTORY_RETAIN_LINES = 1_000
 
 
 @dataclass(slots=True)
@@ -32,7 +35,8 @@ class WorkspaceHistoryEntry:
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> WorkspaceHistoryEntry:
-        return cls(**data)
+        names = {item.name for item in fields(cls)}
+        return cls(**{name: value for name, value in data.items() if name in names})
 
 
 def canonical_workspace_root(value: str | None) -> str | None:
@@ -61,6 +65,8 @@ class WorkspaceHistoryStore:
         ensure_dir(path.parent)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry.to_dict()) + "\n")
+        if path.stat().st_size > HISTORY_MAX_BYTES:
+            path.write_text(read_last_lines(path, HISTORY_RETAIN_LINES) + "\n", encoding="utf-8")
 
     def append_prompt(self, loop_id: str, run_config: LoopRunConfig) -> None:
         root = canonical_workspace_root(run_config.workspace_root)
@@ -124,7 +130,7 @@ class WorkspaceHistoryStore:
         path = workspace_history_file(self.state_root, root)
         if not path.exists():
             return None
-        for raw_line in reversed(path.read_text(encoding="utf-8").splitlines()):
+        for raw_line in reversed(read_last_lines(path, HISTORY_TAIL_LINES).splitlines()):
             try:
                 entry = WorkspaceHistoryEntry.from_dict(json.loads(raw_line))
             except (json.JSONDecodeError, TypeError):
@@ -148,7 +154,7 @@ class WorkspaceHistoryStore:
             return []
         rows: list[WorkspaceHistoryEntry] = []
         total_chars = 0
-        for raw_line in reversed(path.read_text(encoding="utf-8").splitlines()):
+        for raw_line in reversed(read_last_lines(path, HISTORY_TAIL_LINES).splitlines()):
             if not raw_line.strip():
                 continue
             try:

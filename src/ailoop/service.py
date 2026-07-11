@@ -117,15 +117,32 @@ class LoopService:
         self.store.append_event(loop_id, {"at": utc_now(), "event": "control", "control": control})
         return state
 
-    def queue_follow_up(self, loop_id: str, follow_up: str) -> LoopState:
+    def queue_follow_up(self, loop_id: str, follow_up: str, *, run_next: bool = False) -> LoopState:
         cleaned = follow_up.strip()
         if not cleaned:
             raise ValueError("Follow-up prompt is empty")
-        state = self.store.load(loop_id)
-        state.queued_follow_up = cleaned
-        state.queued_follow_up_token = uuid.uuid4().hex
-        self.store.save(state)
-        self.store.append_event(loop_id, {"at": utc_now(), "event": "follow_up_queued"})
+        with self.store.acquire_mutation_lock(loop_id):
+            state = self.store.load(loop_id)
+            if state.pending_single_iteration:
+                raise RuntimeError(f"Loop already has a pending iteration: {loop_id}")
+            state.queued_follow_up = cleaned
+            state.queued_follow_up_token = uuid.uuid4().hex
+            started_next = False
+            if run_next and not self.store.is_locked(loop_id):
+                if not self.should_continue(state):
+                    raise RuntimeError(f"Loop has no pending iterations: {loop_id}")
+                state.control = "run"
+                state.pending_single_iteration = True
+                started_next = True
+            self.store.save(state)
+        self.store.append_event(
+            loop_id,
+            {
+                "at": utc_now(),
+                "event": "follow_up_queued",
+                "run_next": started_next,
+            },
+        )
         return state
 
     def clear_follow_up(self, loop_id: str) -> LoopState:
@@ -139,16 +156,19 @@ class LoopService:
         return state
 
     def request_single_iteration(self, loop_id: str) -> LoopState:
-        if self.store.is_locked(loop_id):
-            raise RuntimeError(f"Loop is already active: {loop_id}")
-        state = self.store.load(loop_id)
-        if state.status in {"running", "pause_requested", "stop_requested"}:
-            raise RuntimeError(f"Loop is already active: {loop_id}")
-        if not self.should_continue(state):
-            raise RuntimeError(f"Loop has no pending iterations: {loop_id}")
-        state.control = "run"
-        state.pending_single_iteration = True
-        self.store.save(state)
+        with self.store.acquire_mutation_lock(loop_id):
+            if self.store.is_locked(loop_id):
+                raise RuntimeError(f"Loop is already active: {loop_id}")
+            state = self.store.load(loop_id)
+            if state.pending_single_iteration:
+                raise RuntimeError(f"Loop already has a pending iteration: {loop_id}")
+            if state.status in {"running", "pause_requested", "stop_requested"}:
+                raise RuntimeError(f"Loop is already active: {loop_id}")
+            if not self.should_continue(state):
+                raise RuntimeError(f"Loop has no pending iterations: {loop_id}")
+            state.control = "run"
+            state.pending_single_iteration = True
+            self.store.save(state)
         self.store.append_event(loop_id, {"at": utc_now(), "event": "single_iteration_requested"})
         return state
 

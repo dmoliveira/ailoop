@@ -1,12 +1,17 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import UTC, datetime
 from typing import Any
 
 
 def utc_now() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _known_fields(cls: type, data: dict[str, Any]) -> dict[str, Any]:
+    names = {item.name for item in fields(cls)}
+    return {name: value for name, value in data.items() if name in names}
 
 
 @dataclass(slots=True)
@@ -131,8 +136,11 @@ class LoopState:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> LoopState:
-        run_config = LoopRunConfig(**data["run_config"])
-        iterations = [IterationRecord(**item) for item in data.get("iterations", [])]
+        run_config = LoopRunConfig(**_known_fields(LoopRunConfig, data["run_config"]))
+        iterations = [
+            IterationRecord(**_known_fields(IterationRecord, item))
+            for item in data.get("iterations", [])
+        ]
         return cls(
             loop_id=data["loop_id"],
             created_at=data["created_at"],

@@ -1060,6 +1060,11 @@ class LoopDashboard(App[None]):
                         yield Static("WORKSPACE & SCOPE", classes="panel-title")
                         yield Static("Root directory", classes="section-title")
                         yield Input(workspace_defaults["root"], id="workspace-root")
+                        yield Static(
+                            "Root is enforced as runner cwd. Other scope/safety settings "
+                            "are saved planning metadata.",
+                            classes="mini-note",
+                        )
                         with Horizontal(classes="form-row"):
                             with Vertical(classes="field-group"):
                                 yield Static("Current branch", classes="section-title")
@@ -3509,13 +3514,10 @@ class LoopDashboard(App[None]):
         if not self._can_queue_follow_up(state):
             self.notify("follow-up queueing is not available for this loop", severity="warning")
             return
-        state = self.service.queue_follow_up(state.loop_id, follow_up)
+        run_next = state.status in {"idle", "paused", "stopped", "failed"}
+        state = self.service.queue_follow_up(state.loop_id, follow_up, run_next=run_next)
         self.query_one("#follow-up-prompt", TextArea).text = ""
-        if (
-            state.status in {"idle", "paused", "stopped", "failed"}
-            and self._can_next_iteration(state)
-        ):
-            self.service.request_single_iteration(state.loop_id)
+        if state.pending_single_iteration:
             self._spawn_resume(state.loop_id)
             self.notify(f"follow-up queued and next iteration started: {state.loop_id}")
         else:
