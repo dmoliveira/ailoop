@@ -20,6 +20,7 @@ class LocalRunner:
         env: dict[str, str],
         stdout_log: Path,
         stderr_log: Path,
+        cwd: Path | None = None,
     ) -> RunnerResult:
         start = time.monotonic()
         full_env = os.environ.copy()
@@ -32,6 +33,7 @@ class LocalRunner:
                     stderr=stderr_handle,
                     text=True,
                     env=full_env,
+                    cwd=str(cwd) if cwd is not None else None,
                 )
                 exit_code = process.wait()
             # Keep log files as the full durable record and only load a bounded tail

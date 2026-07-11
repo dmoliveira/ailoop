@@ -3,7 +3,14 @@ from pathlib import Path
 import pytest
 import yaml
 
-from ailoop.config import build_app_config, deep_merge, load_app_config, resolve_run_config
+from ailoop.config import (
+    DEFAULT_CONFIG,
+    build_app_config,
+    deep_merge,
+    load_app_config,
+    resolve_run_config,
+)
+from ailoop.memory import MemoryStore, run_config_from_entry
 
 
 def test_deep_merge_overrides_nested_values() -> None:
@@ -150,3 +157,31 @@ def test_load_app_config_rejects_bool_and_fractional_numeric_values(tmp_path: Pa
 
     with pytest.raises(ValueError, match="tasks.max_doing must be an integer"):
         load_app_config(float_config)
+
+
+def test_resolve_run_config_preserves_workspace_history_preferences() -> None:
+    config = build_app_config(DEFAULT_CONFIG)
+    run_config = resolve_run_config(
+        config,
+        "hello",
+        workspace_history_enabled=False,
+        workspace_history_limit=2,
+        workspace_history_chars=300,
+    )
+    assert run_config.workspace_history_enabled is False
+    assert run_config.workspace_history_limit == 2
+    assert run_config.workspace_history_chars == 300
+
+
+def test_legacy_memory_replay_uses_entry_scope_as_workspace_root(tmp_path: Path) -> None:
+    app_config = build_app_config(DEFAULT_CONFIG)
+    workspace = tmp_path / "saved-workspace"
+    workspace.mkdir()
+    entry = MemoryStore(tmp_path / "state").create(
+        kind="preset",
+        title="Legacy workspace",
+        run_config=resolve_run_config(app_config, "review this workspace"),
+        folder=workspace,
+    )
+    replay_config = run_config_from_entry(entry, app_config)
+    assert replay_config.workspace_root == str(workspace.resolve())

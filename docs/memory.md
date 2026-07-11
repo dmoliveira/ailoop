@@ -80,9 +80,9 @@ ailoop tui --tmux
 
 Memory filters:
 
-- `5`: all entries
-- `6`: favorites only
-- `7`: history only
+- `7`: all memory entries
+- `f`: favorites only
+- `h`: saved memory history entries
 - `m`: presets only
 - `0`: archived only
 
@@ -98,6 +98,8 @@ Memory navigation + actions:
 - `x`: delete selected entry, then confirm with `x`
 
 The detail pane shows direct CLI equivalents for `show`, `edit`, `favorite`, and `archive` on the selected memory entry.
+
+Note: the TUI `6 history` log view is separate from memory. It now shows recent workspace prompt/follow-up/result history for the selected workspace plus loop iteration history.
 
 ## Scope behavior
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections import deque
 from pathlib import Path
 
@@ -49,3 +50,12 @@ def log_dir(state_root: Path, loop_id: str) -> Path:
 
 def lock_file(state_root: Path, loop_id: str) -> Path:
     return loop_dir(state_root, loop_id) / ".lock"
+
+
+def workspace_history_dir(state_root: Path, workspace_root: str) -> Path:
+    digest = hashlib.sha256(workspace_root.encode()).hexdigest()[:16]
+    return ensure_dir(state_root / "workspaces" / digest)
+
+
+def workspace_history_file(state_root: Path, workspace_root: str) -> Path:
+    return workspace_history_dir(state_root, workspace_root) / "prompt-history.jsonl"

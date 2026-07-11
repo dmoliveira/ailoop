@@ -185,6 +185,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seconds to sleep between iterations",
     )
     run_exec.add_argument("--loop-id", help="Optional custom loop id")
+    run_exec.add_argument("--workspace-root", help="Run the loop from this workspace root")
 
     run_prompt = run_parser.add_argument_group("Prompt assembly")
     run_prompt.add_argument(
@@ -234,6 +235,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay_parser.add_argument("entry_id", help="Saved memory entry id")
     replay_parser.add_argument("--loop-id", help="Optional custom loop id")
+    replay_parser.add_argument(
+        "--all-folders",
+        action="store_true",
+        help="Replay an entry from any workspace scope for the current user",
+    )
 
     memory_parser = subparsers.add_parser(
         "memory",
@@ -581,6 +587,7 @@ def _resolve_memory_run_config(args: argparse.Namespace, app_config) -> object:
         agent_file=args.agent_file,
         task_file=args.task_file,
         stop_when_tasks_complete=True if getattr(args, "until_tasks_complete", False) else None,
+        workspace_root=getattr(args, "workspace_root", None),
     )
 
 
@@ -790,13 +797,21 @@ def main() -> None:
             return
 
         if args.command == "replay":
-            entry = memory.load(args.entry_id, folder=Path.cwd())
+            entry = memory.load(
+                args.entry_id,
+                folder=Path.cwd(),
+                all_folders=args.all_folders,
+            )
             run_config = run_config_from_entry(entry, app_config)
             state = service.create_loop(run_config, loop_id=args.loop_id)
             if not args.quiet and not args.json:
                 print(f"Loop ID: {state.loop_id}")
             final_state = service.run_loop(state.loop_id)
-            memory.mark_used(args.entry_id, folder=Path.cwd())
+            memory.mark_used(
+                args.entry_id,
+                folder=Path.cwd(),
+                all_folders=args.all_folders,
+            )
             if args.json:
                 print_json(final_state.to_dict())
             elif not args.quiet:

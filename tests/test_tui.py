@@ -1605,7 +1605,7 @@ def test_memory_replay_uses_safe_fallback_cwd_when_launch_cwd_is_missing(
     app.refresh_data = lambda: None  # type: ignore[method-assign]
     app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
     app.action_memory_replay()
-    assert seen["command"][-2:] == ["replay", entry.id]
+    assert seen["command"][-3:] == ["replay", entry.id, "--all-folders"]
     assert seen["cwd"] == Path.home()
 
 
@@ -1698,10 +1698,8 @@ def test_missing_cwd_tui_flow_keeps_safe_cwd_for_replay_and_resume(
     import asyncio
 
     asyncio.run(run_test())
-    assert [call["command"][-2:] for call in calls] == [
-        ["replay", entry.id],
-        ["resume", "loop-123"],
-    ]
+    assert calls[0]["command"][-3:] == ["replay", entry.id, "--all-folders"]
+    assert calls[1]["command"][-2:] == ["resume", "loop-123"]
     assert all(call["cwd"] == Path.home() for call in calls)
 
 
@@ -3365,3 +3363,155 @@ def test_iteration_history_text_treats_unfinished_iteration_as_running(tmp_path:
     assert "#2 Run · " in text
     assert ":40 · 8m 00s" in text
     assert "2026-05-16" not in text
+
+
+def test_spawn_replay_passes_all_folders_scope(monkeypatch) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    seen: dict[str, object] = {}
+
+    def fake_popen(command, **kwargs):  # type: ignore[no-untyped-def]
+        seen["command"] = command
+        seen["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    app._spawn_replay("cross-workspace", all_folders=True)
+    assert seen["command"][-3:] == ["replay", "cross-workspace", "--all-folders"]
+
+
+def test_workspace_loop_shortcuts_are_registered() -> None:
+    bindings = {binding[0]: binding[1] for binding in LoopDashboard.BINDINGS}
+    assert bindings["ctrl+j"] == "loop_next"
+    assert bindings["ctrl+k"] == "loop_prev"
+    assert bindings["shift+n"] == "next_iteration"
+    assert bindings["i"] == "follow_up_focus"
+    assert bindings["ctrl+enter"] == "queue_follow_up"
+
+
+def test_existing_loop_uses_edited_workspace_root(tmp_path: Path) -> None:
+    old_root = tmp_path / "old-workspace"
+    new_root = tmp_path / "new-workspace"
+    old_root.mkdir()
+    new_root.mkdir()
+    service = LoopService(tmp_path / "state")
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=2,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+        workspace_root=str(old_root),
+    )
+    state = service.create_loop(run_config, loop_id="workspace-edit")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            app.query_one("#workspace-root").value = str(new_root)
+            updated = app._build_run_config_from_form(service.load_loop(state.loop_id))
+            assert updated.workspace_root == str(new_root)
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_mounted_workspace_root_edit_survives_rerender(tmp_path: Path) -> None:
+    old_root = tmp_path / "old-workspace"
+    new_root = tmp_path / "new-workspace"
+    old_root.mkdir()
+    new_root.mkdir()
+    service = LoopService(tmp_path / "state")
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=2,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+        workspace_root=str(old_root),
+    )
+    state = service.create_loop(run_config, loop_id="workspace-edit-rerender")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            app.query_one("#workspace-root").value = str(new_root)
+            await pilot.pause()
+            assert app.query_one("#workspace-root").value == str(new_root)
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_ctrl_enter_queues_follow_up_from_mounted_textarea(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="keyboard-follow-up")
+    state.status = "paused"
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        app._spawn_resume = lambda _loop_id: None  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            follow_up = app.query_one("#follow-up-prompt")
+            follow_up.text = "run the next focused review"
+            follow_up.focus()
+            await pilot.press("ctrl+enter")
+            await pilot.pause()
+            updated = service.load_loop(state.loop_id)
+            assert updated.queued_follow_up == "run the next focused review"
+            assert updated.pending_single_iteration is True
+
+    import asyncio
+
+    asyncio.run(run_test())
