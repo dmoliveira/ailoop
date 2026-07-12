@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, TextArea
 
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig
@@ -3668,10 +3668,17 @@ def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) 
             app.refresh_data()
             await pilot.pause()
             assert str(app.query_one("#workspace-current-branch").render()) == "branch-first"
-            app.selected_loop_id = second_state.loop_id
-            app._config_bound_loop_id = None
-            app.refresh_data()
+            config_prompt = app.query_one("#config-prompt", TextArea)
+            config_prompt.text = "unsaved project draft"
+            config_prompt.focus()
+            await pilot.press("ctrl+j")
             await pilot.pause()
+            assert app.focused is app.query_one("#loops", DataTable)
+            assert app.selected_loop_id == first_state.loop_id
+            assert config_prompt.text == "unsaved project draft"
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            assert app.selected_loop_id == second_state.loop_id
             assert str(app.query_one("#workspace-current-branch").render()) == "branch-second"
 
     import asyncio

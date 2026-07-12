@@ -2628,7 +2628,7 @@ class LoopDashboard(App[None]):
             actions.append("d confirm delete")
         if loop_state in {"paused", "stopped", "failed", "completed"}:
             actions.append("restart")
-        actions.append("ctrl+j/k switch loop")
+        actions.append("ctrl+j/k exit editor, then switch loop")
         actions.append("i focus follow-up")
         actions.append("ctrl+g queue/run follow-up")
         actions.append("N next iteration")
@@ -3615,6 +3615,7 @@ class LoopDashboard(App[None]):
 
     def _move_loop_selection(self, delta: int) -> None:
         if self._text_input_has_focus():
+            self.query_one("#loops", DataTable).focus()
             return
         states = self._filtered_loops()
         if not states:
