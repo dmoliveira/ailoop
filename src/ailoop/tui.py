@@ -493,7 +493,15 @@ class LoopDashboard(App[None]):
 
     .action-toolbar Button {
         width: 1fr;
-        min-width: 16;
+        min-width: 0;
+    }
+
+    .action-toolbar {
+        layout: vertical;
+    }
+
+    .action-toolbar Button {
+        margin-right: 0;
     }
 
     #start-continue {
@@ -733,7 +741,9 @@ class LoopDashboard(App[None]):
         ("ctrl+k", "loop_prev", "Prev Loop"),
         ("shift+n", "next_iteration", "Next Iter"),
         ("i", "follow_up_focus", "Focus Follow-up"),
-        ("ctrl+enter", "queue_follow_up", "Queue Follow-up"),
+        ("ctrl+enter", "queue_follow_up_shortcut", "Queue Follow-up"),
+        ("alt+enter", "queue_follow_up_shortcut", "Queue Follow-up"),
+        ("ctrl+g", "queue_follow_up_shortcut", "Queue Follow-up"),
     ]
 
     selected_loop_id: reactive[str | None] = reactive(None)
@@ -986,22 +996,22 @@ class LoopDashboard(App[None]):
                     yield Static(id="loop_summary", classes="card-static")
                     with Vertical(id="actions_card", classes="card"):
                         yield Static("ACTIONS", classes="panel-title")
+                        yield Static("Follow-up for next iteration", classes="section-title")
+                        yield TextArea("", id="follow-up-prompt")
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("Queue & Run Follow-up", id="queue-follow-up")
+                            yield Button("Clear Queued", id="clear-follow-up")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("▶ Start", id="start-continue")
                             yield Button("⏸ Pause", id="pause")
                             yield Button("⏹ Stop", id="stop")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("↻ Restart", id="restart")
-                            yield Button("↺ Reset Counter", id="restart-reset")
+                            yield Button("↺ Reset Counter & Restart", id="restart-reset")
                             yield Button("≫ Next Iteration", id="next-iteration")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("⟳ Refresh", id="refresh")
                         yield Static(id="actions-status", classes="mini-note")
-                        yield Static("Follow-up for next iteration", classes="section-title")
-                        yield TextArea("", id="follow-up-prompt")
-                        with Horizontal(classes="toolbar action-toolbar"):
-                            yield Button("Queue & Run Follow-up", id="queue-follow-up")
-                            yield Button("Clear Queued", id="clear-follow-up")
                 with Horizontal(id="middle_row", classes="card-row"):
                     with Vertical(id="config_card", classes="card"):
                         yield Static("AI LOOP CONFIG", classes="panel-title")
@@ -2548,9 +2558,13 @@ class LoopDashboard(App[None]):
                 "stop_requested",
             } 
             self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
-            self.query_one("#restart-reset", Button).label = "↺ Reset Counter"
+            self.query_one("#restart-reset", Button).label = "↺ Reset Counter & Restart"
             self.query_one("#next-iteration", Button).label = "≫ Next Iteration"
-            self.query_one("#queue-follow-up", Button).label = "Queue & Run Follow-up"
+            self.query_one("#queue-follow-up", Button).label = (
+                "Queue & Run Follow-up"
+                if status in {"idle", "paused", "stopped", "failed"}
+                else "Queue Follow-up"
+            )
             self.query_one("#clear-follow-up", Button).label = "Clear Queued"
             self.query_one("#save-config", Button).label = "Save Config"
             self.query_one("#run-loop", Button).label = "Run Loop"
@@ -2616,9 +2630,13 @@ class LoopDashboard(App[None]):
             actions.append("d confirm delete")
         if loop_state in {"paused", "stopped", "failed", "completed"}:
             actions.append("restart")
-        actions.append("ctrl+j/k switch loop")
+        actions.append("ctrl+j/k exit editor, then switch loop")
         actions.append("i focus follow-up")
-        actions.append("ctrl+enter queue/run follow-up")
+        actions.append(
+            "ctrl+g queue/run follow-up"
+            if loop_state in {"idle", "paused", "stopped", "failed"}
+            else "ctrl+g queue follow-up"
+        )
         actions.append("N next iteration")
         action_text = " · ".join(actions) if actions else "read only"
         bar.update(f"{base} · actions {action_text}")
@@ -3603,6 +3621,7 @@ class LoopDashboard(App[None]):
 
     def _move_loop_selection(self, delta: int) -> None:
         if self._text_input_has_focus():
+            self.query_one("#loops", DataTable).focus()
             return
         states = self._filtered_loops()
         if not states:
@@ -3653,6 +3672,12 @@ class LoopDashboard(App[None]):
         else:
             self.notify(f"follow-up queued: {state.loop_id}")
         self.refresh_data()
+
+    def action_queue_follow_up_shortcut(self) -> None:
+        """Only submit a follow-up when its editor owns the keyboard focus."""
+        if self.focused is not self.query_one("#follow-up-prompt", TextArea):
+            return
+        self.action_queue_follow_up()
 
     def action_clear_follow_up(self) -> None:
         state = self._selected_state()
@@ -3724,7 +3749,7 @@ class LoopDashboard(App[None]):
         state.updated_at = datetime.now(UTC).isoformat()
         self.service.store.save(state)
         self._spawn_resume(state.loop_id)
-        self.notify(f"restart reset sent: {state.loop_id}")
+        self.notify(f"counter reset; restart sent: {state.loop_id}")
         self.refresh_data()
 
     def action_remove_selected(self) -> None:

@@ -4,7 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from textual.widgets import DataTable
+from textual.widgets import DataTable, TextArea
 
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig
@@ -3137,8 +3137,10 @@ def test_restart_actions_clear_pending_single_iteration(tmp_path: Path) -> None:
     )
     app._dashboard_form_values = lambda: {}  # type: ignore[method-assign]
     app._workspace_form_values = lambda: {}  # type: ignore[method-assign]
-    app._spawn_resume = lambda _loop_id: None  # type: ignore[method-assign]
-    app.notify = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    resumed: list[str] = []
+    notifications: list[str] = []
+    app._spawn_resume = resumed.append  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: notifications.append(message)  # type: ignore[method-assign]
     app.refresh_data = lambda: None  # type: ignore[method-assign]
 
     app.action_restart_selected()
@@ -3150,6 +3152,8 @@ def test_restart_actions_clear_pending_single_iteration(tmp_path: Path) -> None:
     app.action_restart_reset_selected()
     reset = service.load_loop(state.loop_id)
     assert reset.pending_single_iteration is False
+    assert resumed == [state.loop_id, state.loop_id]
+    assert notifications[-1] == f"counter reset; restart sent: {state.loop_id}"
 
 
 def test_safety_card_text_compacts_preview_summary() -> None:
@@ -3385,7 +3389,8 @@ def test_workspace_loop_shortcuts_are_registered() -> None:
     assert bindings["ctrl+k"] == "loop_prev"
     assert bindings["shift+n"] == "next_iteration"
     assert bindings["i"] == "follow_up_focus"
-    assert bindings["ctrl+enter"] == "queue_follow_up"
+    assert bindings["ctrl+enter"] == "queue_follow_up_shortcut"
+    assert bindings["ctrl+g"] == "queue_follow_up_shortcut"
 
 
 def test_existing_loop_uses_edited_workspace_root(tmp_path: Path) -> None:
@@ -3538,7 +3543,7 @@ def test_mounted_workspace_root_edit_survives_rerender(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
-def test_ctrl_enter_queues_follow_up_from_mounted_textarea(tmp_path: Path) -> None:
+def test_follow_up_shortcut_requires_follow_up_focus_and_accepts_ctrl_g(tmp_path: Path) -> None:
     service = LoopService(tmp_path / "state")
     run_config = LoopRunConfig(
         prompt="hello",
@@ -3570,9 +3575,14 @@ def test_ctrl_enter_queues_follow_up_from_mounted_textarea(tmp_path: Path) -> No
             app.refresh_data()
             await pilot.pause()
             follow_up = app.query_one("#follow-up-prompt")
+            assert app.query_one("#queue-follow-up").label == "Queue & Run Follow-up"
             follow_up.text = "run the next focused review"
+            app.query_one("#config-prompt").focus()
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert service.load_loop(state.loop_id).queued_follow_up is None
             follow_up.focus()
-            await pilot.press("ctrl+enter")
+            await pilot.press("ctrl+g")
             await pilot.pause()
             updated = service.load_loop(state.loop_id)
             assert updated.queued_follow_up == "run the next focused review"
@@ -3663,10 +3673,17 @@ def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) 
             app.refresh_data()
             await pilot.pause()
             assert str(app.query_one("#workspace-current-branch").render()) == "branch-first"
-            app.selected_loop_id = second_state.loop_id
-            app._config_bound_loop_id = None
-            app.refresh_data()
+            config_prompt = app.query_one("#config-prompt", TextArea)
+            config_prompt.text = "unsaved project draft"
+            config_prompt.focus()
+            await pilot.press("ctrl+j")
             await pilot.pause()
+            assert app.focused is app.query_one("#loops", DataTable)
+            assert app.selected_loop_id == first_state.loop_id
+            assert config_prompt.text == "unsaved project draft"
+            await pilot.press("ctrl+j")
+            await pilot.pause()
+            assert app.selected_loop_id == second_state.loop_id
             assert str(app.query_one("#workspace-current-branch").render()) == "branch-second"
 
     import asyncio
