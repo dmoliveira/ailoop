@@ -1004,7 +1004,7 @@ class LoopDashboard(App[None]):
                             yield Button("⏹ Stop", id="stop")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("↻ Restart", id="restart")
-                            yield Button("↺ Reset Counter", id="restart-reset")
+                            yield Button("↺ Reset Counter & Restart", id="restart-reset")
                             yield Button("≫ Next Iteration", id="next-iteration")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("⟳ Refresh", id="refresh")
@@ -2560,7 +2560,7 @@ class LoopDashboard(App[None]):
                 "stop_requested",
             } 
             self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
-            self.query_one("#restart-reset", Button).label = "↺ Reset Counter"
+            self.query_one("#restart-reset", Button).label = "↺ Reset Counter & Restart"
             self.query_one("#next-iteration", Button).label = "≫ Next Iteration"
             self.query_one("#queue-follow-up", Button).label = "Queue & Run Follow-up"
             self.query_one("#clear-follow-up", Button).label = "Clear Queued"
@@ -3743,7 +3743,7 @@ class LoopDashboard(App[None]):
         state.updated_at = datetime.now(UTC).isoformat()
         self.service.store.save(state)
         self._spawn_resume(state.loop_id)
-        self.notify(f"restart reset sent: {state.loop_id}")
+        self.notify(f"counter reset; restart sent: {state.loop_id}")
         self.refresh_data()
 
     def action_remove_selected(self) -> None:
