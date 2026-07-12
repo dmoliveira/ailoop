@@ -493,7 +493,17 @@ class LoopDashboard(App[None]):
 
     .action-toolbar Button {
         width: 1fr;
-        min-width: 16;
+        min-width: 0;
+    }
+
+    /* Action labels are intentionally explicit. Stack them so narrow action
+       panels never truncate a destructive or state-changing control. */
+    .action-toolbar {
+        layout: vertical;
+    }
+
+    .action-toolbar Button {
+        margin-right: 0;
     }
 
     #start-continue {
@@ -733,7 +743,9 @@ class LoopDashboard(App[None]):
         ("ctrl+k", "loop_prev", "Prev Loop"),
         ("shift+n", "next_iteration", "Next Iter"),
         ("i", "follow_up_focus", "Focus Follow-up"),
-        ("ctrl+enter", "queue_follow_up", "Queue Follow-up"),
+        ("ctrl+enter", "queue_follow_up_shortcut", "Queue Follow-up"),
+        ("alt+enter", "queue_follow_up_shortcut", "Queue Follow-up"),
+        ("ctrl+g", "queue_follow_up_shortcut", "Queue Follow-up"),
     ]
 
     selected_loop_id: reactive[str | None] = reactive(None)
@@ -2618,7 +2630,7 @@ class LoopDashboard(App[None]):
             actions.append("restart")
         actions.append("ctrl+j/k switch loop")
         actions.append("i focus follow-up")
-        actions.append("ctrl+enter queue/run follow-up")
+        actions.append("ctrl+g queue/run follow-up")
         actions.append("N next iteration")
         action_text = " · ".join(actions) if actions else "read only"
         bar.update(f"{base} · actions {action_text}")
@@ -3653,6 +3665,12 @@ class LoopDashboard(App[None]):
         else:
             self.notify(f"follow-up queued: {state.loop_id}")
         self.refresh_data()
+
+    def action_queue_follow_up_shortcut(self) -> None:
+        """Only submit a follow-up when its editor owns the keyboard focus."""
+        if self.focused is not self.query_one("#follow-up-prompt", TextArea):
+            return
+        self.action_queue_follow_up()
 
     def action_clear_follow_up(self) -> None:
         state = self._selected_state()

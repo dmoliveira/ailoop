@@ -3385,7 +3385,8 @@ def test_workspace_loop_shortcuts_are_registered() -> None:
     assert bindings["ctrl+k"] == "loop_prev"
     assert bindings["shift+n"] == "next_iteration"
     assert bindings["i"] == "follow_up_focus"
-    assert bindings["ctrl+enter"] == "queue_follow_up"
+    assert bindings["ctrl+enter"] == "queue_follow_up_shortcut"
+    assert bindings["ctrl+g"] == "queue_follow_up_shortcut"
 
 
 def test_existing_loop_uses_edited_workspace_root(tmp_path: Path) -> None:
@@ -3538,7 +3539,7 @@ def test_mounted_workspace_root_edit_survives_rerender(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
-def test_ctrl_enter_queues_follow_up_from_mounted_textarea(tmp_path: Path) -> None:
+def test_follow_up_shortcut_requires_follow_up_focus_and_accepts_ctrl_g(tmp_path: Path) -> None:
     service = LoopService(tmp_path / "state")
     run_config = LoopRunConfig(
         prompt="hello",
@@ -3571,8 +3572,12 @@ def test_ctrl_enter_queues_follow_up_from_mounted_textarea(tmp_path: Path) -> No
             await pilot.pause()
             follow_up = app.query_one("#follow-up-prompt")
             follow_up.text = "run the next focused review"
+            app.query_one("#config-prompt").focus()
+            await pilot.press("ctrl+g")
+            await pilot.pause()
+            assert service.load_loop(state.loop_id).queued_follow_up is None
             follow_up.focus()
-            await pilot.press("ctrl+enter")
+            await pilot.press("ctrl+g")
             await pilot.pause()
             updated = service.load_loop(state.loop_id)
             assert updated.queued_follow_up == "run the next focused review"
