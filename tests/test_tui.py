@@ -3575,6 +3575,7 @@ def test_follow_up_shortcut_requires_follow_up_focus_and_accepts_ctrl_g(tmp_path
             app.refresh_data()
             await pilot.pause()
             follow_up = app.query_one("#follow-up-prompt")
+            assert app.query_one("#queue-follow-up").label == "Queue & Run Follow-up"
             follow_up.text = "run the next focused review"
             app.query_one("#config-prompt").focus()
             await pilot.press("ctrl+g")

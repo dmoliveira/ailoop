@@ -496,8 +496,6 @@ class LoopDashboard(App[None]):
         min-width: 0;
     }
 
-    /* Action labels are intentionally explicit. Stack them so narrow action
-       panels never truncate a destructive or state-changing control. */
     .action-toolbar {
         layout: vertical;
     }
@@ -2562,7 +2560,11 @@ class LoopDashboard(App[None]):
             self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
             self.query_one("#restart-reset", Button).label = "↺ Reset Counter & Restart"
             self.query_one("#next-iteration", Button).label = "≫ Next Iteration"
-            self.query_one("#queue-follow-up", Button).label = "Queue & Run Follow-up"
+            self.query_one("#queue-follow-up", Button).label = (
+                "Queue & Run Follow-up"
+                if status in {"idle", "paused", "stopped", "failed"}
+                else "Queue Follow-up"
+            )
             self.query_one("#clear-follow-up", Button).label = "Clear Queued"
             self.query_one("#save-config", Button).label = "Save Config"
             self.query_one("#run-loop", Button).label = "Run Loop"
@@ -2630,7 +2632,11 @@ class LoopDashboard(App[None]):
             actions.append("restart")
         actions.append("ctrl+j/k exit editor, then switch loop")
         actions.append("i focus follow-up")
-        actions.append("ctrl+g queue/run follow-up")
+        actions.append(
+            "ctrl+g queue/run follow-up"
+            if loop_state in {"idle", "paused", "stopped", "failed"}
+            else "ctrl+g queue follow-up"
+        )
         actions.append("N next iteration")
         action_text = " · ".join(actions) if actions else "read only"
         bar.update(f"{base} · actions {action_text}")
