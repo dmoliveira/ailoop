@@ -996,6 +996,11 @@ class LoopDashboard(App[None]):
                     yield Static(id="loop_summary", classes="card-static")
                     with Vertical(id="actions_card", classes="card"):
                         yield Static("ACTIONS", classes="panel-title")
+                        yield Static("Follow-up for next iteration", classes="section-title")
+                        yield TextArea("", id="follow-up-prompt")
+                        with Horizontal(classes="toolbar action-toolbar"):
+                            yield Button("Queue & Run Follow-up", id="queue-follow-up")
+                            yield Button("Clear Queued", id="clear-follow-up")
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("▶ Start", id="start-continue")
                             yield Button("⏸ Pause", id="pause")
@@ -1007,11 +1012,6 @@ class LoopDashboard(App[None]):
                         with Horizontal(classes="toolbar action-toolbar"):
                             yield Button("⟳ Refresh", id="refresh")
                         yield Static(id="actions-status", classes="mini-note")
-                        yield Static("Follow-up for next iteration", classes="section-title")
-                        yield TextArea("", id="follow-up-prompt")
-                        with Horizontal(classes="toolbar action-toolbar"):
-                            yield Button("Queue & Run Follow-up", id="queue-follow-up")
-                            yield Button("Clear Queued", id="clear-follow-up")
                 with Horizontal(id="middle_row", classes="card-row"):
                     with Vertical(id="config_card", classes="card"):
                         yield Static("AI LOOP CONFIG", classes="panel-title")
