@@ -3005,6 +3005,8 @@ class LoopDashboard(App[None]):
         self._clear_delete_confirmation()
 
     def refresh_data(self) -> None:
+        if not self.is_running:
+            return
         all_states = self.service.list_loops()
         states = self._filtered_loops(all_states)
         all_loop_ids = {state.loop_id for state in all_states}

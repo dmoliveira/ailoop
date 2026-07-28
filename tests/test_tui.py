@@ -4007,6 +4007,33 @@ def test_refresh_uses_one_full_loop_scan(tmp_path: Path) -> None:
     asyncio.run(run_test())
 
 
+def test_refresh_is_a_noop_when_the_app_is_not_running(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = LoopService(tmp_path / "state")
+    app.service.list_loops = lambda: pytest.fail("refresh scanned after shutdown")  # type: ignore[method-assign]
+
+    app.refresh_data()
+
+
+def test_on_mount_refresh_populates_without_manual_refresh(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_loop_config(), loop_id="mounted-refresh")
+    state.status = "running"
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.selected_loop_id == state.loop_id
+            assert app.query_one("#loops", DataTable).get_row(state.loop_id)
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
 def test_delete_confirmation_is_cleared_when_selection_changes(tmp_path: Path) -> None:
     service = LoopService(tmp_path / "state")
     first = service.create_loop(make_loop_config(), loop_id="delete-first")
