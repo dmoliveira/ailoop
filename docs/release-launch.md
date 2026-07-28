@@ -1,6 +1,6 @@
 # Release + launch 🚀
 
-Use this page to publish `ailoop` as a public repo, push the first release, and ship the launch copy.
+Use this page to build, publish, and verify an `ailoop` GitHub release.
 
 ## 1) Public repo settings
 
@@ -62,80 +62,53 @@ gh repo edit dmoliveira/ailoop \
   --add-topic python
 ```
 
-## 3) PyPI publish
+## 3) Build GitHub release artifacts
 
-Recommended package name:
-
-- `ailoop`
-
-Build:
+Build the wheel and source distribution from the validated release commit:
 
 ```bash
-python3 -m venv .venv-publish
-. .venv-publish/bin/activate
-python -m pip install --upgrade pip build twine
-python -m build
-twine check dist/*
+rm -rf dist
+uv build
+uvx twine check dist/ai_loop-*.whl dist/ai_loop-*.tar.gz
+(cd dist && shasum -a 256 ai_loop-*.whl ai_loop-*.tar.gz > SHA256SUMS)
 ```
 
-Publish:
+Verify the wheel in a clean environment before publishing:
 
 ```bash
-twine upload dist/*
+python3 -m venv /tmp/ailoop-release-smoke
+/tmp/ailoop-release-smoke/bin/pip install dist/ai_loop-0.2.0-py3-none-any.whl
+/tmp/ailoop-release-smoke/bin/ailoop --help
 ```
 
-Then verify:
+PyPI publication is not currently configured; release artifacts are hosted on GitHub.
+
+## 4) Git tag + GitHub release
+
+Create the release from the merged release-PR commit:
 
 ```bash
-pipx install ailoop
-ailoop --help
+gh release create v0.2.0 dist/* \
+  --target <merged-release-sha> \
+  --title "ailoop v0.2.0" \
+  --notes-file docs/release-notes-v0.2.0.md
 ```
 
-## 4) First git tag + GitHub release
-
-Suggested first tag:
-
-- `v0.1.0`
-
-Commands:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-gh release create v0.1.0 \
-  --title "ailoop v0.1.0" \
-  --notes-file docs/release-notes-v0.1.0.md
-```
+Then verify the tag, checksums, assets, and wheel install from the published release.
 
 ## 5) Release notes
 
-Create `docs/release-notes-v0.1.0.md` with:
-
-```md
-# ailoop v0.1.0
-
-- Launches `ailoop`, a small CLI for running AI terminal tools in safe, repeatable loops.
-- Adds YAML config, CLI overrides, and durable local state for resumable runs.
-- Supports OpenCode, Codex, Claude, and other command-template runners.
-- Includes strict Markdown task-file mode for structured iterative work.
-- Ships pause, resume, stop, logs, stats, tail, and JSON output for automation.
-```
+Keep release-specific notes in `docs/release-notes-vX.Y.Z.md`. Notes should separate additions, changes, fixes, quality, and installation instructions without claiming unpublished distribution channels.
 
 ## 6) Badge updates after publish
 
-Once the public repo and PyPI package are live, these links should resolve cleanly:
+These links should resolve cleanly:
 
-- PyPI version
-- Python versions
-- License
+- latest GitHub release
+- supported Python version
+- license
+- GitHub Actions CI
 - release tag
-- GitHub Actions test badge if/when workflow is added
-
-Optional future badges:
-
-- `GitHub release`
-- `Last commit`
-- `Stars`
 
 ## 7) Short launch post
 
@@ -183,7 +156,9 @@ Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 - README hero renders
 - docs links work
 - support link works
-- PyPI package is published
-- `v0.1.0` tag exists
+- wheel and source distribution are attached
+- SHA-256 checksums are attached
+- clean-wheel install smoke passes
+- `v0.2.0` tag exists at the merged release commit
 - GitHub release is published
-- launch post is published
+- GitHub release assets and notes are verified

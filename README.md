@@ -1,9 +1,9 @@
 # ailoop 🔁
 
-[![PyPI](https://img.shields.io/pypi/v/ailoop?label=PyPI)](https://pypi.org/project/ailoop/)
-[![Python](https://img.shields.io/pypi/pyversions/ailoop)](https://pypi.org/project/ailoop/)
+[![Release](https://img.shields.io/github/v/release/dmoliveira/ailoop?label=release)](https://github.com/dmoliveira/ailoop/releases/latest)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)](#quick-start)
+[![CI](https://github.com/dmoliveira/ailoop/actions/workflows/ci.yml/badge.svg)](https://github.com/dmoliveira/ailoop/actions/workflows/ci.yml)
 [![Lint](https://img.shields.io/badge/lint-ruff-blue)](#quick-start)
 [![CLI](https://img.shields.io/badge/type-CLI-orange)](#quick-start)
 [![AI Loop Runner](https://img.shields.io/badge/focus-AI%20loop%20runner-8a2be2)](#why-ailoop-)
@@ -63,7 +63,7 @@ uv run ailoop run "Do exactly 3 iterations." --steps 3
 Or install globally:
 
 ```bash
-pipx install ailoop
+pipx install https://github.com/dmoliveira/ailoop/releases/download/v0.2.0/ai_loop-0.2.0-py3-none-any.whl
 ailoop --help
 ```
 

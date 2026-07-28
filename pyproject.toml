@@ -1,12 +1,12 @@
 [project]
 name = "ai-loop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Simple resilient loop runner for AI terminal tools"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "PyYAML>=6.0",
-  "textual>=0.63.0",
+  "textual>=8.2.8,<9.0",
 ]
 
 [project.scripts]
