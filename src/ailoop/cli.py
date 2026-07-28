@@ -74,7 +74,7 @@ Common usage:
   ailoop check-task-file ./loop_tasks.md
 """.strip()
 
-RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
+RUNNING_STATUSES = {"running", "pause_requested", "stop_requested", "cleanup_failed"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
 
 
@@ -221,6 +221,11 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     resume_parser.add_argument("loop_id", help="Loop id to resume")
+    resume_parser.add_argument(
+        "--worker",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
 
     replay_parser = subparsers.add_parser(
         "replay",
@@ -789,7 +794,11 @@ def main() -> None:
             return
 
         if args.command == "resume":
-            final_state = service.run_loop(args.loop_id)
+            final_state = (
+                service.run_loop(args.loop_id)
+                if args.worker
+                else service.resume_loop(args.loop_id)
+            )
             if args.json:
                 print_json(final_state.to_dict())
             elif not args.quiet:
@@ -906,6 +915,12 @@ def main() -> None:
             print_json({"ok": False, "error": str(exc)})
         else:
             print(f"Invalid configuration: {exc}")
+        raise SystemExit(1) from exc
+    except RuntimeError as exc:
+        if args.json:
+            print_json({"ok": False, "error": str(exc)})
+        else:
+            print(f"Error: {exc}")
         raise SystemExit(1) from exc
     finally:
         set_color_mode(previous_color_mode)

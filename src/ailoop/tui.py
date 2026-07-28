@@ -9,7 +9,7 @@ import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Literal
 
@@ -31,7 +31,7 @@ FilterMode = Literal["running", "active", "all"]
 LogKind = Literal["stdout", "stderr", "prompt", "events", "memory", "metrics", "history"]
 MemoryFilter = Literal["all", "favorites", "history", "archived", "presets"]
 
-RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
+RUNNING_STATUSES = {"running", "pause_requested", "stop_requested", "cleanup_failed"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
 COMPACT_LAYOUT_WIDTH = 100
 DRAFT_BOUND_ID = "__defaults__"
@@ -1806,6 +1806,7 @@ class LoopDashboard(App[None]):
             "stop_requested": "red",
             "stopped": "red",
             "failed": "red",
+            "cleanup_failed": "red",
             "completed": "cyan",
             "idle": "blue",
         }.get(status, "white")
@@ -2562,7 +2563,7 @@ class LoopDashboard(App[None]):
             can_resume = False
         can_stop = status in {"running", "pause_requested", "paused"}
         can_restart = status in {"paused", "stopped", "failed", "completed"}
-        can_restart_reset = state is not None and status not in {"running", "pause_requested"}
+        can_restart_reset = state is not None and status not in RUNNING_STATUSES
         can_next_iteration = self._can_next_iteration(state)
         memory_entry = self._primary_memory_entry()
         for button_id, active in {
@@ -2616,6 +2617,7 @@ class LoopDashboard(App[None]):
                 "running",
                 "pause_requested",
                 "stop_requested",
+                "cleanup_failed",
             } 
             self.query_one("#run-loop", Button).disabled = not self._form_supports_run()
             self.query_one("#restart-reset", Button).label = "↺ Reset Counter & Restart"
@@ -3362,6 +3364,7 @@ class LoopDashboard(App[None]):
                 "--config",
                 str(self.config_path),
                 "resume",
+                "--worker",
                 loop_id,
             ],
             cwd=self._spawn_cwd(),
@@ -3668,8 +3671,11 @@ class LoopDashboard(App[None]):
                         severity="warning",
                     )
                     return
-                state.control = "run"  # type: ignore[attr-defined]
-                self.service.store.save(state)
+                try:
+                    self.service.request_resume(self.selected_loop_id)
+                except RuntimeError as exc:
+                    self.notify(str(exc), severity="error")
+                    return
             self._spawn_resume(self.selected_loop_id)
             self.notify(f"resume sent: {self.selected_loop_id}")
             self.refresh_data()
@@ -3701,10 +3707,12 @@ class LoopDashboard(App[None]):
             self.notify("stop or pause the loop before saving config changes", severity="warning")
             return
         state.run_config = self._build_run_config_from_form(state)
-        state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
-        state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
-        state.updated_at = datetime.now(UTC).isoformat()
-        self.service.store.save(state)
+        state = self.service.update_loop_config(
+            state.loop_id,
+            state.run_config,
+            self._dashboard_form_values(),
+            self._workspace_form_values(),
+        )
         self.notify(f"config saved: {state.loop_id}")
         self.refresh_data()
 
@@ -3720,28 +3728,39 @@ class LoopDashboard(App[None]):
             "running",
             "pause_requested",
             "stop_requested",
+            "cleanup_failed",
         }:
-            state.run_config = self._build_run_config_from_form(state)
-            state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
-            state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
-            state.control = "run"  # type: ignore[attr-defined]
+            run_config = self._build_run_config_from_form(state)
+            dashboard_config = self._dashboard_form_values()
+            workspace_config = self._workspace_form_values()
             if mode == "scheduled":
-                state.status = "idle"  # type: ignore[attr-defined]
-            state.updated_at = datetime.now(UTC).isoformat()
-            self.service.store.save(state)
-            if mode == "scheduled":
+                self.service.update_loop_config(
+                    state.loop_id,
+                    run_config,
+                    dashboard_config,
+                    workspace_config,
+                )
                 self.notify(f"schedule saved: {state.loop_id}")
                 self.refresh_data()
                 return
+            state = self.service.request_restart(
+                state.loop_id,
+                run_config,
+                dashboard_config,
+                workspace_config,
+            )
             self._spawn_resume(state.loop_id)
             self.notify(f"run sent: {state.loop_id}")
             self.refresh_data()
             return
         run_config = self._build_run_config_from_form()
         created = self.service.create_loop(run_config)
-        created.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
-        created.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
-        self.service.store.save(created)
+        created = self.service.update_loop_config(
+            created.loop_id,
+            run_config,
+            self._dashboard_form_values(),
+            self._workspace_form_values(),
+        )
         self.selected_loop_id = created.loop_id
         self._config_bound_loop_id = None
         if mode == "scheduled":
@@ -3799,7 +3818,9 @@ class LoopDashboard(App[None]):
         if not self._can_queue_follow_up(state):
             self.notify("follow-up queueing is not available for this loop", severity="warning")
             return
-        run_next = state.status in {"idle", "paused", "stopped", "failed"}
+        run_next = state.status in {"idle", "paused", "stopped", "failed"} and (
+            self._state_mode_and_schedule(state)[0] != "scheduled"
+        )
         if run_next and not self._validate_workspace_root():
             return
         state = self.service.queue_follow_up(state.loop_id, follow_up, run_next=run_next)
@@ -3852,14 +3873,15 @@ class LoopDashboard(App[None]):
             return
         if not self._validate_workspace_root():
             return
-        state.run_config = self._build_run_config_from_form(state)
-        state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
-        state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
-        state.control = "run"
-        state.pending_single_iteration = False  # type: ignore[attr-defined]
-        state.status = "idle"
-        state.updated_at = datetime.now(UTC).isoformat()
-        self.service.store.save(state)
+        if self._state_mode_and_schedule(state)[0] == "scheduled":
+            self.notify("scheduled loops cannot be restarted manually", severity="warning")
+            return
+        state = self.service.request_restart(
+            state.loop_id,
+            self._build_run_config_from_form(state),
+            self._dashboard_form_values(),
+            self._workspace_form_values(),
+        )
         self._spawn_resume(state.loop_id)
         self.notify(f"restart sent: {state.loop_id}")
         self.refresh_data()
@@ -3870,22 +3892,16 @@ class LoopDashboard(App[None]):
             return
         if not self._validate_workspace_root():
             return
-        state.run_config = self._build_run_config_from_form(state)
-        state.dashboard_config = self._dashboard_form_values()  # type: ignore[attr-defined]
-        state.workspace_config = self._workspace_form_values()  # type: ignore[attr-defined]
-        state.control = "run"
-        state.pending_single_iteration = False  # type: ignore[attr-defined]
-        state.status = "idle"
-        state.current_iteration = 0
-        state.completed_iterations = 0
-        state.last_exit_code = None
-        state.consecutive_failures = 0
-        state.total_duration_seconds = 0.0
-        state.average_duration_seconds = 0.0
-        state.last_summary = None
-        state.iterations = []
-        state.updated_at = datetime.now(UTC).isoformat()
-        self.service.store.save(state)
+        if self._state_mode_and_schedule(state)[0] == "scheduled":
+            self.notify("scheduled loops cannot be restarted manually", severity="warning")
+            return
+        state = self.service.request_restart(
+            state.loop_id,
+            self._build_run_config_from_form(state),
+            self._dashboard_form_values(),
+            self._workspace_form_values(),
+            reset=True,
+        )
         self._spawn_resume(state.loop_id)
         self.notify(f"counter reset; restart sent: {state.loop_id}")
         self.refresh_data()

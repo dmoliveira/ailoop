@@ -8,6 +8,7 @@ import pytest
 from ailoop.cli import main
 from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig, LoopState
+from ailoop.service import LoopService
 
 
 def write_test_config(tmp_path: Path) -> Path:
@@ -65,6 +66,41 @@ def test_key_subcommand_help_includes_examples(capsys, monkeypatch) -> None:
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "Examples:" in out
+
+
+def test_resume_command_resets_persisted_pause_and_runs(monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(
+        LoopRunConfig(
+            prompt="resume me",
+            runner="test",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=["-c", "print('ok')"],
+        ),
+        loop_id="cli-resume",
+    )
+    service.request_control(state.loop_id, "pause")
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--quiet", "--config", str(config_path), "resume", state.loop_id],
+    )
+
+    main()
+
+    resumed = service.load_loop(state.loop_id)
+    assert resumed.status == "completed"
+    assert resumed.control == "run"
+    assert resumed.completed_iterations == 1
 
 
 def test_task_template_with_rules_prints_guide(capsys, monkeypatch) -> None:
@@ -799,12 +835,10 @@ def test_replay_failure_does_not_mark_used(capsys, monkeypatch, tmp_path: Path) 
         "sys.argv",
         ["ailoop", "--config", str(config_path), "replay", entry_id],
     )
-    try:
+    with pytest.raises(SystemExit) as exc_info:
         main()
-    except RuntimeError as exc:
-        assert "boom" in str(exc)
-    else:
-        raise AssertionError("expected replay failure")
+    assert exc_info.value.code == 1
+    assert "boom" in capsys.readouterr().out
 
     store = MemoryStore(tmp_path / "state")
     entry = store.load(entry_id)
