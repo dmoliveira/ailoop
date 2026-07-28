@@ -7,6 +7,7 @@
 - [runners.md](runners.md) — runner model and command templates
 - [examples.md](examples.md) — copy-paste command examples
 - [release-launch.md](release-launch.md) — GitHub artifact, release, and launch workflow
+- [release-notes-v0.2.1.md](release-notes-v0.2.1.md) — v0.2.1 lifecycle safety fixes
 - [release-notes-v0.2.0.md](release-notes-v0.2.0.md) — v0.2.0 highlights and fixes
 - [support.md](support.md) — support and donate links
 - [branding/hero-banner-brief.md](branding/hero-banner-brief.md) — hero banner brief and prompt

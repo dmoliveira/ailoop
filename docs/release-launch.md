@@ -68,6 +68,7 @@ Build the wheel and source distribution from the validated release commit:
 
 ```bash
 rm -rf dist
+uv run coverage erase
 uv build
 uvx twine check dist/ai_loop-*.whl dist/ai_loop-*.tar.gz
 (cd dist && shasum -a 256 ai_loop-*.whl ai_loop-*.tar.gz > SHA256SUMS)
@@ -76,22 +77,34 @@ uvx twine check dist/ai_loop-*.whl dist/ai_loop-*.tar.gz
 Verify the wheel in a clean environment before publishing:
 
 ```bash
-python3 -m venv /tmp/ailoop-release-smoke
-/tmp/ailoop-release-smoke/bin/pip install dist/ai_loop-0.2.0-py3-none-any.whl
-/tmp/ailoop-release-smoke/bin/ailoop --help
+SMOKE_DIR="$(mktemp -d)"
+python3 -m venv "$SMOKE_DIR"
+"$SMOKE_DIR/bin/pip" install dist/ai_loop-0.2.1-py3-none-any.whl
+"$SMOKE_DIR/bin/ailoop" --help
 ```
 
 PyPI publication is not currently configured; release artifacts are hosted on GitHub.
 
 ## 4) Git tag + GitHub release
 
-Create the release from the merged release-PR commit:
+Create and push an annotated tag from the exact merged release-PR commit, then use that
+verified tag for the GitHub release:
+
+Before tagging, wait for the `main` CI workflow on that exact commit and verify both the
+Python 3.11 and Python 3.13 jobs passed. Also confirm that neither the remote tag nor the
+GitHub release already exists.
 
 ```bash
-gh release create v0.2.0 dist/* \
-  --target <merged-release-sha> \
-  --title "ailoop v0.2.0" \
-  --notes-file docs/release-notes-v0.2.0.md
+RELEASE_SHA=<merged-release-sha>
+git tag -a v0.2.1 "$RELEASE_SHA" -m "ailoop v0.2.1"
+git push origin v0.2.1
+gh release create v0.2.1 \
+  dist/ai_loop-0.2.1-py3-none-any.whl \
+  dist/ai_loop-0.2.1.tar.gz \
+  dist/SHA256SUMS \
+  --verify-tag \
+  --title "ailoop v0.2.1" \
+  --notes-file docs/release-notes-v0.2.1.md
 ```
 
 Then verify the tag, checksums, assets, and wheel install from the published release.
@@ -159,6 +172,6 @@ Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 - wheel and source distribution are attached
 - SHA-256 checksums are attached
 - clean-wheel install smoke passes
-- `v0.2.0` tag exists at the merged release commit
+- `v0.2.1^{}` peels to the exact merged release commit
 - GitHub release is published
 - GitHub release assets and notes are verified
