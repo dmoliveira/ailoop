@@ -8,37 +8,78 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..paths import read_last_lines
-from .base import RunnerResult
+from .base import ProcessCleanupError, RunnerLifecycle, RunnerResult
 
 CAPTURE_TAIL_LINES = 80
 TERMINATION_GRACE_SECONDS = 5
+FINAL_KILL_GRACE_SECONDS = 1
 CONTROL_POLL_SECONDS = 0.25
+GROUP_POLL_SECONDS = 0.05
 
 
 class LocalRunner:
     @staticmethod
-    def _terminate_process_group(process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
+    def _process_group_exists(process_group_id: int) -> bool:
+        if os.name != "posix":
+            return False
         try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGTERM)
-            else:
-                process.terminate()
+            os.killpg(process_group_id, 0)
+        except ProcessLookupError:
+            return False
+        except (PermissionError, OSError):
+            return True
+        return True
+
+    @staticmethod
+    def _signal_process_group(process_group_id: int, signal_number: int) -> None:
+        try:
+            os.killpg(process_group_id, signal_number)
         except (OSError, ProcessLookupError):
             pass
 
-    @staticmethod
-    def _kill_process_group(process: subprocess.Popen[str]) -> None:
-        if process.poll() is not None:
-            return
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-        except (OSError, ProcessLookupError):
-            pass
+    @classmethod
+    def _cleanup_process_group(
+        cls,
+        process: subprocess.Popen[str],
+        process_group_id: int,
+    ) -> bool:
+        if os.name != "posix":
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=TERMINATION_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            return process.poll() is not None
+
+        cls._signal_process_group(process_group_id, signal.SIGTERM)
+        deadline = time.monotonic() + TERMINATION_GRACE_SECONDS
+        while cls._process_group_exists(process_group_id) and time.monotonic() < deadline:
+            if process.poll() is None:
+                try:
+                    process.wait(timeout=GROUP_POLL_SECONDS)
+                except subprocess.TimeoutExpired:
+                    continue
+            time.sleep(GROUP_POLL_SECONDS)
+
+        if cls._process_group_exists(process_group_id):
+            cls._signal_process_group(process_group_id, signal.SIGKILL)
+            deadline = time.monotonic() + FINAL_KILL_GRACE_SECONDS
+            while cls._process_group_exists(process_group_id) and time.monotonic() < deadline:
+                if process.poll() is None:
+                    try:
+                        process.wait(timeout=GROUP_POLL_SECONDS)
+                    except subprocess.TimeoutExpired:
+                        continue
+                time.sleep(GROUP_POLL_SECONDS)
+
+        if process.poll() is None:
+            try:
+                process.wait(timeout=GROUP_POLL_SECONDS)
+            except subprocess.TimeoutExpired:
+                pass
+        return process.poll() is not None and not cls._process_group_exists(process_group_id)
 
     def run(
         self,
@@ -51,12 +92,15 @@ class LocalRunner:
         cwd: Path | None = None,
         timeout_seconds: int | None = None,
         should_stop: Callable[[], bool] | None = None,
+        lifecycle: RunnerLifecycle | None = None,
     ) -> RunnerResult:
         start = time.monotonic()
         full_env = os.environ.copy()
         full_env.update(env)
-        try:
-            with stdout_log.open("w") as stdout_handle, stderr_log.open("w") as stderr_handle:
+        lifecycle = lifecycle or RunnerLifecycle()
+
+        with stdout_log.open("w") as stdout_handle, stderr_log.open("w") as stderr_handle:
+            try:
                 process = subprocess.Popen(
                     [command, *args],
                     stdout=stdout_handle,
@@ -66,51 +110,74 @@ class LocalRunner:
                     cwd=str(cwd) if cwd is not None else None,
                     start_new_session=True,
                 )
+            except OSError as exc:
+                exit_code = 127
                 timed_out = False
                 cancelled = False
+                stderr_handle.write(str(exc))
+            else:
+                process_group_id = process.pid
+                lifecycle.process_group_id = process_group_id
+                lifecycle.direct_child_reaped = False
+                lifecycle.cleanup_confirmed = False
+                timed_out = False
+                cancelled = False
+                exit_code: int | None = None
                 deadline = (
                     time.monotonic() + timeout_seconds if timeout_seconds is not None else None
                 )
-                while True:
-                    try:
-                        wait_timeout = CONTROL_POLL_SECONDS if should_stop else timeout_seconds
-                        if deadline is not None:
-                            wait_timeout = min(
-                                wait_timeout or CONTROL_POLL_SECONDS,
-                                max(0, deadline - time.monotonic()),
-                            )
-                        exit_code = process.wait(timeout=wait_timeout)
+                execution_error: BaseException | None = None
+                try:
+                    while True:
+                        try:
+                            wait_timeout = CONTROL_POLL_SECONDS if should_stop else timeout_seconds
+                            if deadline is not None:
+                                wait_timeout = min(
+                                    wait_timeout or CONTROL_POLL_SECONDS,
+                                    max(0, deadline - time.monotonic()),
+                                )
+                            exit_code = process.wait(timeout=wait_timeout)
+                            break
+                        except subprocess.TimeoutExpired:
+                            if should_stop and should_stop():
+                                cancelled = True
+                            elif deadline is not None and time.monotonic() >= deadline:
+                                timed_out = True
+                            else:
+                                continue
                         break
-                    except subprocess.TimeoutExpired:
-                        if should_stop and should_stop():
-                            cancelled = True
-                        elif deadline is not None and time.monotonic() >= deadline:
-                            timed_out = True
-                        else:
-                            continue
-                    self._terminate_process_group(process)
+                except BaseException as exc:
+                    execution_error = exc
+                    raise
+                finally:
                     try:
-                        exit_code = process.wait(timeout=TERMINATION_GRACE_SECONDS)
-                    except subprocess.TimeoutExpired:
-                        self._kill_process_group(process)
-                        exit_code = process.wait()
-                    if timed_out:
-                        stderr_handle.write(f"runner timed out after {timeout_seconds} seconds\n")
-                    else:
-                        stderr_handle.write("runner stopped by loop control\n")
-                    break
-            # Keep log files as the full durable record and only load a bounded tail
-            # back into memory for summaries/status output after the child exits.
-            stdout = read_last_lines(stdout_log, CAPTURE_TAIL_LINES)
-            stderr = read_last_lines(stderr_log, CAPTURE_TAIL_LINES)
-        except OSError as exc:
-            stdout = ""
-            stderr = str(exc)
-            exit_code = 127
-            stdout_log.write_text(stdout)
-            stderr_log.write_text(stderr)
-            timed_out = False
-            cancelled = False
+                        lifecycle.cleanup_confirmed = self._cleanup_process_group(
+                            process,
+                            process_group_id,
+                        )
+                    except BaseException:
+                        lifecycle.cleanup_confirmed = False
+                    lifecycle.direct_child_reaped = process.poll() is not None
+                    if execution_error is not None and not lifecycle.cleanup_confirmed:
+                        execution_error.add_note(
+                            f"runner process group {process_group_id} cleanup was not confirmed"
+                        )
+
+                if not lifecycle.cleanup_confirmed:
+                    raise ProcessCleanupError(
+                        f"Runner process group cleanup was not confirmed: {process_group_id}"
+                    )
+                if exit_code is None:
+                    exit_code = process.returncode
+                if exit_code is None:
+                    raise ProcessCleanupError(f"Runner child was not reaped: {process_group_id}")
+                if timed_out:
+                    stderr_handle.write(f"runner timed out after {timeout_seconds} seconds\n")
+                elif cancelled:
+                    stderr_handle.write("runner stopped by loop control\n")
+
+        stdout = read_last_lines(stdout_log, CAPTURE_TAIL_LINES)
+        stderr = read_last_lines(stderr_log, CAPTURE_TAIL_LINES)
         duration = time.monotonic() - start
         return RunnerResult(
             command=[command, *args],

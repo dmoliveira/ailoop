@@ -1,4 +1,5 @@
 import subprocess
+from dataclasses import fields
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -8,7 +9,7 @@ from textual.binding import Binding
 from textual.widgets import DataTable, Input, TextArea
 
 from ailoop.memory import MemoryStore
-from ailoop.models import IterationRecord, LoopRunConfig
+from ailoop.models import IterationRecord, LoopRunConfig, LoopState
 from ailoop.service import LoopService
 from ailoop.tui import (
     LoopDashboard,
@@ -46,6 +47,14 @@ def make_loop_config(
         workspace_root=workspace_root,
         task_file=task_file,
     )
+
+
+def persist_test_state(service: LoopService, state: LoopState) -> None:
+    """Replace fixture state while still exercising the transactional write path."""
+    with service.store.mutate(state.loop_id) as persisted:
+        for item in fields(LoopState):
+            if item.name != "loop_id":
+                setattr(persisted, item.name, getattr(state, item.name))
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
@@ -208,7 +217,7 @@ def test_loop_table_uses_iteration_and_mode_columns(tmp_path: Path) -> None:
     state.status = "running"
     state.current_iteration = 2
     state.completed_iterations = 1
-    service.store.save(state)
+    persist_test_state(service, state)
 
     async def run_test() -> None:
         app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
@@ -388,7 +397,7 @@ def test_summary_counts_reflect_state_buckets(tmp_path: Path) -> None:
     service.request_control(state.loop_id, "pause")
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
-    assert app._summary_counts() == (2, 2, 1)
+    assert app._summary_counts() == (2, 2, 0)
 
 
 def test_memory_log_text_lists_entries_with_kind_and_favorite(tmp_path: Path) -> None:
@@ -722,7 +731,7 @@ def test_metrics_today_text_uses_iteration_summaries_for_signal_counts(tmp_path:
             summary="Modified 2 files after validation failure.",
         ),
     ]
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -1657,7 +1666,7 @@ def test_resume_uses_safe_fallback_cwd_when_launch_cwd_is_missing(monkeypatch) -
     monkeypatch.setattr("os.getcwd", missing_getcwd)
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app._spawn_resume("loop-123")
-    assert seen["command"][-2:] == ["resume", "loop-123"]
+    assert seen["command"][-3:] == ["resume", "--worker", "loop-123"]
     assert seen["cwd"] == Path.home()
 
 
@@ -1729,7 +1738,7 @@ def test_missing_cwd_tui_flow_keeps_safe_cwd_for_replay_and_resume(
 
     asyncio.run(run_test())
     assert calls[0]["command"][-3:] == ["replay", entry.id, "--all-folders"]
-    assert calls[1]["command"][-2:] == ["resume", "loop-123"]
+    assert calls[1]["command"][-3:] == ["resume", "--worker", "loop-123"]
     assert all(call["cwd"] == Path.home() for call in calls)
 
 
@@ -2798,7 +2807,7 @@ def test_action_next_iteration_requests_single_step_and_resume(tmp_path: Path) -
     )
     state = service.create_loop(run_config, loop_id="step-action")
     state.status = "paused"
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -2841,7 +2850,7 @@ def test_action_resume_selected_resets_control_to_run(tmp_path: Path) -> None:
     state = service.create_loop(run_config, loop_id="resume-action")
     state.status = "paused"
     state.control = "pause"
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -2883,7 +2892,7 @@ def test_action_resume_selected_blocks_scheduled_loop(tmp_path: Path) -> None:
     state = service.create_loop(run_config, loop_id="resume-scheduled")
     state.status = "idle"
     state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -2974,7 +2983,7 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
         "branch_strategy": "per-iteration",
     }
     state.workspace_config = {"root": "/tmp/scheduled-workspace"}
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -3011,7 +3020,7 @@ def test_config_status_uses_saved_scheduled_mode(tmp_path: Path) -> None:
     )
     state = service.create_loop(run_config, loop_id="scheduled-config")
     state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "6"}
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -3047,7 +3056,7 @@ def test_saved_scheduled_loop_reloads_scheduled_mode_into_form(tmp_path: Path) -
         "schedule_start": "09:30",
         "schedule_timezone": "utc",
     }
-    service.store.save(state)
+    persist_test_state(service, state)
 
     async def run_test() -> None:
         app = LoopDashboard(
@@ -3104,7 +3113,7 @@ def test_saved_dashboard_and_workspace_values_reload_into_forms(tmp_path: Path) 
         "include": "src/**\ndocs/**",
         "exclude": ".git/**\ndist/**",
     }
-    service.store.save(state)
+    persist_test_state(service, state)
 
     async def run_test() -> None:
         app = LoopDashboard(
@@ -3157,7 +3166,7 @@ def test_restart_actions_clear_pending_single_iteration(tmp_path: Path) -> None:
     state = service.create_loop(run_config, loop_id="restart-step")
     state.status = "paused"
     state.pending_single_iteration = True
-    service.store.save(state)
+    persist_test_state(service, state)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -3178,7 +3187,7 @@ def test_restart_actions_clear_pending_single_iteration(tmp_path: Path) -> None:
     assert restarted.pending_single_iteration is False
 
     restarted.pending_single_iteration = True
-    service.store.save(restarted)
+    persist_test_state(service, restarted)
     app.action_restart_reset_selected()
     reset = service.load_loop(state.loop_id)
     assert reset.pending_single_iteration is False
@@ -3602,7 +3611,7 @@ def test_follow_up_shortcut_requires_follow_up_focus_and_accepts_ctrl_g(tmp_path
     )
     state = service.create_loop(run_config, loop_id="keyboard-follow-up")
     state.status = "paused"
-    service.store.save(state)
+    persist_test_state(service, state)
 
     async def run_test() -> None:
         app = LoopDashboard(
@@ -3783,17 +3792,17 @@ def test_filtered_loops_composes_status_and_query_without_reordering(tmp_path: P
         make_loop_config(prompt="Alpha running review"), loop_id="running-alpha"
     )
     running.status = "running"
-    service.store.save(running)
+    persist_test_state(service, running)
     paused = service.create_loop(
         make_loop_config(prompt="Alpha paused review"), loop_id="paused-alpha"
     )
     paused.status = "paused"
-    service.store.save(paused)
+    persist_test_state(service, paused)
     completed = service.create_loop(
         make_loop_config(prompt="Alpha completed review"), loop_id="completed-alpha"
     )
     completed.status = "completed"
-    service.store.save(completed)
+    persist_test_state(service, completed)
 
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.service = service
@@ -4019,7 +4028,7 @@ def test_on_mount_refresh_populates_without_manual_refresh(tmp_path: Path) -> No
     service = LoopService(tmp_path / "state")
     state = service.create_loop(make_loop_config(), loop_id="mounted-refresh")
     state.status = "running"
-    service.store.save(state)
+    persist_test_state(service, state)
 
     async def run_test() -> None:
         app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())

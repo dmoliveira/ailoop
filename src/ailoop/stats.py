@@ -14,6 +14,7 @@ STATUS_ICONS = {
     "stopped": "⏹",
     "completed": "✅",
     "failed": "❌",
+    "cleanup_failed": "⚠",
 }
 
 ANSI_RESET = "\033[0m"
@@ -56,7 +57,7 @@ def _status_icon(status: str) -> str:
 def _status_label(status: str) -> str:
     if status in {"completed"}:
         return _style(status, ANSI_GREEN)
-    if status in {"failed", "stopped"}:
+    if status in {"failed", "stopped", "cleanup_failed"}:
         return _style(status, ANSI_RED)
     if status in {"paused", "pause_requested", "stop_requested"}:
         return _style(status, ANSI_YELLOW)

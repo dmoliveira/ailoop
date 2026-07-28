@@ -1,9 +1,9 @@
-import os
 from pathlib import Path
 
 import pytest
 
 from ailoop.models import LoopRunConfig
+from ailoop.paths import lock_file
 from ailoop.runners.local import CAPTURE_TAIL_LINES, LocalRunner
 from ailoop.service import LoopService
 from ailoop.stats import render_iteration_summary, render_stats, render_status
@@ -129,8 +129,8 @@ def test_request_single_iteration_rejects_active_loop(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="active-step")
-    state.status = "running"
-    service.store.save(state)
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.status = "running"
 
     with pytest.raises(RuntimeError, match="Loop is already active: active-step"):
         service.request_single_iteration(state.loop_id)
@@ -212,7 +212,7 @@ def test_run_loop_preserves_pre_start_stop_request(tmp_path: Path) -> None:
     assert final_state.completed_iterations == 0
 
 
-def test_run_loop_resumes_when_control_is_reset_to_run(tmp_path: Path) -> None:
+def test_resume_loop_resets_control_and_runs(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
         prompt="hello",
@@ -230,11 +230,9 @@ def test_run_loop_resumes_when_control_is_reset_to_run(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="resume-run")
-    state.status = "paused"
-    state.control = "run"
-    service.store.save(state)
+    service.request_control(state.loop_id, "pause")
 
-    final_state = service.run_loop(state.loop_id)
+    final_state = service.resume_loop(state.loop_id)
 
     assert final_state.status == "completed"
     assert final_state.completed_iterations == 1
@@ -258,8 +256,12 @@ def test_run_loop_keeps_scheduled_loops_idle(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="scheduled-idle")
-    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
-    service.store.save(state)
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "1",
+        }
 
     final_state = service.run_loop(state.loop_id)
 
@@ -285,8 +287,12 @@ def test_scheduled_loop_preserves_pre_start_pause_request(tmp_path: Path) -> Non
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="scheduled-pause")
-    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
-    service.store.save(state)
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "1",
+        }
     service.request_control(state.loop_id, "pause")
 
     final_state = service.run_loop(state.loop_id)
@@ -313,8 +319,12 @@ def test_scheduled_loop_preserves_pre_start_stop_request(tmp_path: Path) -> None
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="scheduled-stop")
-    state.dashboard_config = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
-    service.store.save(state)
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.dashboard_config = {
+            "mode": "scheduled",
+            "schedule_type": "hours",
+            "schedule_every": "1",
+        }
     service.request_control(state.loop_id, "stop")
 
     final_state = service.run_loop(state.loop_id)
@@ -487,13 +497,12 @@ def test_remove_locked_loop_is_rejected_even_with_force(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     service.create_loop(run_config, loop_id="loop6")
-    lock_path = tmp_path / "loop6" / ".lock"
-    lock_path.write_text(str(os.getpid()))
-    with pytest.raises(RuntimeError):
-        service.remove_loop("loop6", force=True)
+    with service.store.acquire_lock("loop6"):
+        with pytest.raises(RuntimeError, match="already active"):
+            service.remove_loop("loop6", force=True)
 
 
-def test_stale_lock_is_cleaned_and_remove_can_continue(tmp_path: Path) -> None:
+def test_unlocked_diagnostic_file_does_not_block_remove(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
         prompt="hello",
@@ -511,13 +520,14 @@ def test_stale_lock_is_cleaned_and_remove_can_continue(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     service.create_loop(run_config, loop_id="loop7")
-    lock_path = tmp_path / "loop7" / ".lock"
+    lock_path = lock_file(tmp_path, "loop7")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text("999999")
     service.remove_loop("loop7", force=True)
-    assert not lock_path.exists()
+    assert lock_path.exists()
 
 
-def test_stale_lock_is_cleaned_and_run_can_continue(tmp_path: Path) -> None:
+def test_unlocked_diagnostic_file_does_not_block_run(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
         prompt="hello",
@@ -535,14 +545,15 @@ def test_stale_lock_is_cleaned_and_run_can_continue(tmp_path: Path) -> None:
         runner_args=["-c", "print('ok')"],
     )
     state = service.create_loop(run_config, loop_id="loop7b")
-    lock_path = tmp_path / "loop7b" / ".lock"
+    lock_path = lock_file(tmp_path, "loop7b")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock_path.write_text("999999")
 
     final_state = service.run_loop(state.loop_id)
 
     assert final_state.status == "completed"
     assert final_state.completed_iterations == 1
-    assert not lock_path.exists()
+    assert lock_path.exists()
 
 
 def test_loop_stops_when_task_file_is_complete(tmp_path: Path) -> None:
