@@ -334,7 +334,7 @@
           <a href="#task-file-mode">Task file</a>
           <a href="#docs">Docs</a>
           <a href="https://github.com/dmoliveira">Diego Marinho</a>
-          <a href="https://pypi.org/project/ailoop/">PyPI</a>
+          <a href="https://github.com/dmoliveira/ailoop/releases">Releases</a>
         </nav>
       </div>
     </header>
@@ -351,7 +351,7 @@
             <div class="cta-row">
               <a class="btn btn-primary" href="#quick-start">⚡ Get started</a>
               <a class="btn btn-secondary" href="#docs">📚 Docs</a>
-              <a class="btn btn-secondary" href="https://pypi.org/project/ailoop/">PyPI</a>
+              <a class="btn btn-secondary" href="https://github.com/dmoliveira/ailoop/releases">Releases</a>
             </div>
             <div class="author-row">
               <span>By <strong>Diego Marinho</strong></span>
@@ -417,26 +417,26 @@ $ ailoop pause demo-loop
             </div>
             <div class="card">
               <h3>2. Run</h3>
-              <pre>ailoop init-config
-ailoop run "Review the repo and keep iterating." \
+              <pre>uv run ailoop init-config
+uv run ailoop run "Review the repo and keep iterating." \
   --runner opencode \
   --agent orchestrator</pre>
             </div>
           </div>
           <div class="card" style="margin-top: 16px;">
             <h3>Watch / control / inspect</h3>
-            <pre>ailoop ps
-ailoop tail &lt;loop-id&gt;
-ailoop pause &lt;loop-id&gt;
-ailoop resume &lt;loop-id&gt;
-ailoop status &lt;loop-id&gt;</pre>
+            <pre>uv run ailoop ps
+uv run ailoop tail &lt;loop-id&gt;
+uv run ailoop pause &lt;loop-id&gt;
+uv run ailoop resume &lt;loop-id&gt;
+uv run ailoop status &lt;loop-id&gt;</pre>
           </div>
           <div class="card" style="margin-top: 16px;">
             <h3>Save + replay</h3>
-            <pre>ailoop memory save "Quick review" "Review the repo." \
+            <pre>uv run ailoop memory save "Quick review" "Review the repo." \
   --runner opencode --agent orchestrator
-ailoop memory list
-ailoop replay &lt;memory-id&gt;</pre>
+uv run ailoop memory list
+uv run ailoop replay &lt;memory-id&gt;</pre>
           </div>
         </div>
       </section>
@@ -464,9 +464,9 @@ ailoop replay &lt;memory-id&gt;</pre>
             </div>
             <div class="card">
               <h3>Use it</h3>
-              <pre>ailoop init-task-file ./loop_tasks.md
-ailoop check-task-file ./loop_tasks.md
-ailoop run "Work the task list." \
+              <pre>uv run ailoop init-task-file ./loop_tasks.md
+uv run ailoop check-task-file ./loop_tasks.md
+uv run ailoop run "Work the task list." \
   --task-file ./loop_tasks.md \
   --until-tasks-complete</pre>
             </div>
@@ -523,7 +523,7 @@ ailoop run "Work the task list." \
           <a href="https://github.com/dmoliveira">Author GitHub</a>
           <a href="https://www.linkedin.com/in/dmoliveira/">LinkedIn</a>
           <a href="https://github.com/dmoliveira/ailoop">Repo GitHub</a>
-          <a href="https://pypi.org/project/ailoop/">PyPI</a>
+          <a href="https://github.com/dmoliveira/ailoop/releases">Releases</a>
           <a href="https://github.com/dmoliveira/ailoop/blob/main/docs/support.md">Support</a>
         </p>
       </div>
