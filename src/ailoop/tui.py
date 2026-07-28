@@ -8,17 +8,20 @@ import shlex
 import shutil
 import subprocess
 import sys
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
 from textual import events, on
 from textual.app import App, ComposeResult, ScreenStackError
+from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
 from textual.widgets import Button, Checkbox, DataTable, Header, Input, Select, Static, TextArea
 
 from .memory import MemoryStore
+from .models import LoopState
 from .paths import read_last_lines
 from .service import LoopService
 from .stats import STATUS_ICONS
@@ -31,6 +34,7 @@ MemoryFilter = Literal["all", "favorites", "history", "archived", "presets"]
 RUNNING_STATUSES = {"running", "pause_requested", "stop_requested"}
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
 COMPACT_LAYOUT_WIDTH = 100
+DRAFT_BOUND_ID = "__defaults__"
 
 
 def launch_in_tmux(config_path: Path, loop_id: str | None = None) -> None:
@@ -74,6 +78,31 @@ def short_status(status: str) -> str:
 
 def short_loop_id(loop_id: str) -> str:
     return loop_id if len(loop_id) <= 12 else loop_id[:12]
+
+
+def loop_matches_query(state: LoopState, query: str) -> bool:
+    """Return whether a persisted loop contains a case-insensitive query."""
+    normalized_query = query.strip().casefold()
+    if not normalized_query:
+        return True
+    mode = str(
+        state.dashboard_config.get(
+            "mode",
+            "fixed" if state.run_config.steps is not None else "infinite",
+        )
+    )
+    searchable_values = (
+        state.loop_id,
+        state.status,
+        short_status(state.status),
+        mode,
+        state.run_config.runner,
+        state.run_config.agent,
+        state.run_config.prompt,
+        state.run_config.workspace_root,
+        state.run_config.task_file,
+    )
+    return any(normalized_query in (value or "").casefold() for value in searchable_values)
 
 
 def render_progress_text(completed: int, target: int | None, width: int = 4) -> str:
@@ -386,6 +415,10 @@ class LoopDashboard(App[None]):
         border: round #2b3b52;
         background: #0c1626;
         color: #dbe7f4;
+    }
+
+    #loop-query:focus {
+        border: round #4ea3ff;
     }
 
     #sidebar_stats {
@@ -726,7 +759,7 @@ class LoopDashboard(App[None]):
         ("c", "memory_label_clear", "Clear Label"),
         ("o", "memory_scope_toggle", "Toggle Memory Scope"),
         ("/", "memory_query_focus", "Focus Query"),
-        ("escape", "memory_query_clear", "Clear Query"),
+        ("escape", "query_clear", "Clear Query"),
         ("8", "memory_replay", "Replay Memory"),
         ("9", "memory_favorite", "Toggle Favorite"),
         ("v", "memory_restore", "Restore Memory"),
@@ -737,8 +770,9 @@ class LoopDashboard(App[None]):
         ("a", "filter_active", "Active"),
         ("g", "filter_running", "Running"),
         ("l", "filter_all", "All"),
-        ("ctrl+j", "loop_next", "Next Loop"),
-        ("ctrl+k", "loop_prev", "Prev Loop"),
+        Binding("ctrl+l", "loop_query_focus", "Search Loops", priority=True),
+        Binding("ctrl+j", "loop_next", "Next Loop", priority=True),
+        Binding("ctrl+k", "loop_prev", "Prev Loop", priority=True),
         ("shift+n", "next_iteration", "Next Iter"),
         ("i", "follow_up_focus", "Focus Follow-up"),
         ("ctrl+enter", "queue_follow_up_shortcut", "Queue Follow-up"),
@@ -759,8 +793,11 @@ class LoopDashboard(App[None]):
     memory_delete_armed: reactive[bool] = reactive(False)
     delete_armed: reactive[bool] = reactive(False)
 
-    def _summary_counts(self) -> tuple[int, int, int]:
-        states = self.service.list_loops()
+    def _summary_counts(
+        self,
+        states: Sequence[LoopState] | None = None,
+    ) -> tuple[int, int, int]:
+        states = self.service.list_loops() if states is None else states
         running = sum(1 for state in states if state.status in RUNNING_STATUSES)
         active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
         return len(states), active, running
@@ -776,6 +813,9 @@ class LoopDashboard(App[None]):
         self.memory = MemoryStore(Path(app_config.paths.state_dir))
         self._config_bound_loop_id: str | None = None
         self._draft_loop_selected = False
+        self._selection_initialized = False
+        self._visible_loop_ids: set[str] = set()
+        self._delete_armed_loop_id: str | None = None
         try:
             self.launch_cwd = Path(os.getcwd())
         except FileNotFoundError:
@@ -987,7 +1027,7 @@ class LoopDashboard(App[None]):
                     yield Button("g running", id="filter-running")
                     yield Button("a active", id="filter-active")
                     yield Button("l all", id="filter-all")
-                yield Input(placeholder="Search loops...", id="loop-query")
+                yield Input(placeholder="Search loops (Ctrl+L)", id="loop-query")
                 yield Static(id="sidebar_stats")
                 yield DataTable(id="loops", zebra_stripes=True)
                 yield Static(id="system_stats", classes="card-static")
@@ -1588,7 +1628,7 @@ class LoopDashboard(App[None]):
         defaults = self._config_form_defaults()
         workspace_defaults = self._workspace_form_defaults()
         if state is None:
-            bound_id = "__defaults__"
+            bound_id = DRAFT_BOUND_ID
             if self._config_bound_loop_id == bound_id:
                 return
             values = defaults
@@ -1771,10 +1811,10 @@ class LoopDashboard(App[None]):
         }.get(status, "white")
         return f"[{color}]{short_status(status)}[/]"
 
-    def _render_summary_bar(self) -> None:
+    def _render_summary_bar(self, states: Sequence[LoopState] | None = None) -> None:
         if not self.is_mounted:
             return
-        states = self.service.list_loops()
+        states = self.service.list_loops() if states is None else states
         total = len(states)
         active = sum(1 for state in states if state.status in ACTIVE_STATUSES)
         running = sum(1 for state in states if state.status in RUNNING_STATUSES)
@@ -1783,7 +1823,7 @@ class LoopDashboard(App[None]):
         scheduled = sum(
             1 for state in states if self._state_mode_and_schedule(state)[0] == "scheduled"
         )
-        selected = self._selected_state()
+        selected = self._selected_state(states)
         summary_text = self._summary_bar_text(
             total,
             active,
@@ -1799,7 +1839,12 @@ class LoopDashboard(App[None]):
         except Exception:
             return
 
-    def _render_sidebar_stats(self, states: list[object]) -> None:
+    def _render_sidebar_stats(
+        self,
+        states: Sequence[LoopState],
+        *,
+        total_count: int | None = None,
+    ) -> None:
         try:
             sidebar_stats = self.query_one("#sidebar_stats", Static)
         except Exception:
@@ -1813,14 +1858,26 @@ class LoopDashboard(App[None]):
             1 for state in states if self._state_mode_and_schedule(state)[0] == "scheduled"
         )
         selected = short_loop_id(self.selected_loop_id) if self.selected_loop_id else "none"
+        selected_hidden = bool(
+            self.selected_loop_id
+            and not any(
+                getattr(state, "loop_id", None) == self.selected_loop_id for state in states
+            )
+        )
+        if selected_hidden:
+            selected += " (outside results)"
         counts_text = (
             f"loops {len(states)} · active {active} · running {running} · paused {paused} · "
             f"scheduled {scheduled} · failed {failed}"
         )
-        sidebar_stats.update(
-            f"{counts_text}\n"
-            f"filter {self.filter_mode} · query {query} · selected {selected}"
-        )
+        lines = [counts_text, f"filter {self.filter_mode} · query {query} · selected {selected}"]
+        if self.loop_query:
+            total_text = total_count if total_count is not None else len(states)
+            if states:
+                lines.append(f"{len(states)} matches · {total_text} total · Enter open · Esc clear")
+            else:
+                lines.append(f"No loops match · {total_text} total · Esc clear")
+        sidebar_stats.update("\n".join(lines))
 
     def _render_system_stats(self, states: list[object]) -> None:
         try:
@@ -1922,8 +1979,11 @@ class LoopDashboard(App[None]):
     def _footer_base_text(self, width: int | None = None) -> str:
         actual_width = self.size.width if width is None else width
         if actual_width and actual_width <= COMPACT_LAYOUT_WIDTH:
-            return "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q"
-        return "nav ↑↓/click · filters g/a/l · logs 1-7/f/h/m/0 · r refresh · q quit"
+            return "Ctrl+L · ↑↓ · g/a/l · 1-7/f/h/m/0 · r/q"
+        return (
+            "nav ↑↓/click · Ctrl+L search · filters g/a/l · "
+            "logs 1-7/f/h/m/0 · r refresh · q quit"
+        )
 
     def _memory_compact_actions(self) -> str:
         parts = ["[ ]", "b/n/c"]
@@ -2261,8 +2321,8 @@ class LoopDashboard(App[None]):
             f"limits {limits} · stop {stop_text}"
         )
 
-    def _metrics_today_text(self) -> str:
-        states = self.service.list_loops()
+    def _metrics_today_text(self, states: Sequence[LoopState] | None = None) -> str:
+        states = self.service.list_loops() if states is None else states
         iterations = [
             item for state in states for item in state.iterations if is_local_today(item.started_at)
         ]
@@ -2485,9 +2545,9 @@ class LoopDashboard(App[None]):
             )
         return "\n".join(rows)
 
-    def _sync_button_state(self) -> None:
+    def _sync_button_state(self, states: Sequence[LoopState] | None = None) -> None:
         self._sync_form_controls()
-        state = self._selected_state()
+        state = self._selected_state(states)
         status = state.status if state is not None else None
         state_mode = (
             self._state_mode_and_schedule(state)[0]
@@ -2641,26 +2701,21 @@ class LoopDashboard(App[None]):
         action_text = " · ".join(actions) if actions else "read only"
         bar.update(f"{base} · actions {action_text}")
 
-    def _filtered_loops(self):
-        states = self.service.list_loops()
+    def _filtered_loops(
+        self,
+        states: Sequence[LoopState] | None = None,
+    ) -> list[LoopState]:
+        states = list(self.service.list_loops() if states is None else states)
         if self.filter_mode == "running":
             states = [state for state in states if state.status in RUNNING_STATUSES]
         elif self.filter_mode == "active":
             states = [state for state in states if state.status in ACTIVE_STATUSES]
-        if not self.loop_query:
-            return states
-        query = self.loop_query.lower()
-        return [
-            state
-            for state in states
-            if query in state.loop_id.lower()
-            or query in state.status.lower()
-            or query in (state.run_config.agent or "").lower()
-            or query in state.run_config.runner.lower()
-        ]
+        return [state for state in states if loop_matches_query(state, self.loop_query)]
 
-    def _empty_loop_message(self) -> str:
-        total, active, running = self._summary_counts()
+    def _empty_loop_message(self, states: Sequence[LoopState] | None = None) -> str:
+        total, active, running = (
+            self._summary_counts() if states is None else self._summary_counts(states)
+        )
         if total == 0:
             return (
                 "No loops yet.\n\n"
@@ -2668,6 +2723,11 @@ class LoopDashboard(App[None]):
                 '  ailoop run "Review the repo"\n\n'
                 "Tip:\n"
                 "  q quit · r refresh"
+            )
+        if self.loop_query:
+            return (
+                f'No loops match "{self.loop_query}".\n\n'
+                "Press Esc to clear the search or edit the query."
             )
         if self.filter_mode == "running" and running == 0:
             return (
@@ -2933,29 +2993,42 @@ class LoopDashboard(App[None]):
             ]
         )
 
+    def _clear_delete_confirmation(self) -> None:
+        self.delete_armed = False
+        self._delete_armed_loop_id = None
+
+    def _detach_missing_selection(self) -> None:
+        """Keep edited form values when a selected loop disappears externally."""
+        self.selected_loop_id = None
+        self._draft_loop_selected = True
+        self._config_bound_loop_id = DRAFT_BOUND_ID
+        self._clear_delete_confirmation()
+
     def refresh_data(self) -> None:
-        states = self._filtered_loops()
+        if not self.is_running:
+            return
+        all_states = self.service.list_loops()
+        states = self._filtered_loops(all_states)
+        all_loop_ids = {state.loop_id for state in all_states}
+        self._visible_loop_ids = {state.loop_id for state in states}
         table = self.query_one(DataTable)
         table.clear(columns=False)
-        self._render_sidebar_stats(states)
-        self._render_system_stats(states)
-        if self.initial_loop_id and self.selected_loop_id is None and not self._draft_loop_selected:
-            self.selected_loop_id = self.initial_loop_id
-        if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
-            try:
-                self.service.load_loop(self.selected_loop_id)
-            except FileNotFoundError:
-                pass
-            else:
-                self.filter_mode = "all"
-                states = self._filtered_loops()
-        if self.selected_loop_id is None and states and not self._draft_loop_selected:
-            self.selected_loop_id = states[0].loop_id
-        if self.selected_loop_id and not any(s.loop_id == self.selected_loop_id for s in states):
-            self.selected_loop_id = states[0].loop_id if states else None
 
-        if not states:
-            table.add_row("-", self.filter_mode, "-", "-", "-", key="empty")
+        if not self._selection_initialized:
+            if self.initial_loop_id in all_loop_ids:
+                self.selected_loop_id = self.initial_loop_id
+            elif self.selected_loop_id not in all_loop_ids:
+                self.selected_loop_id = None
+            if self.selected_loop_id is None and states and not self._draft_loop_selected:
+                self.selected_loop_id = states[0].loop_id
+            self._selection_initialized = True
+        elif self.selected_loop_id and self.selected_loop_id not in all_loop_ids:
+            self._detach_missing_selection()
+
+        self._render_sidebar_stats(states, total_count=len(all_states))
+        self._render_system_stats(states)
+        table.cursor_type = "row" if states else "none"
+        table.show_cursor = bool(states)
 
         for state in states:
             target = state.run_config.steps
@@ -2981,24 +3054,33 @@ class LoopDashboard(App[None]):
                 key=state.loop_id,
             )
 
-        if states and self.selected_loop_id:
+        if states and self.selected_loop_id in self._visible_loop_ids:
             try:
                 table.move_cursor(row=table.get_row_index(self.selected_loop_id))
             except Exception:
                 pass
-        self._sync_button_state()
-        self._render_summary_bar()
-        self._render_selected()
+        elif states:
+            table.move_cursor(row=0)
+        self._sync_button_state(all_states)
+        self._render_selected(all_states)
 
-    def _selected_state(self):
+    def _selected_state(
+        self,
+        states: Sequence[LoopState] | None = None,
+    ) -> LoopState | None:
         if not self.selected_loop_id:
             return None
+        if states is not None:
+            return next(
+                (state for state in states if state.loop_id == self.selected_loop_id),
+                None,
+            )
         try:
             return self.service.load_loop(self.selected_loop_id)
         except FileNotFoundError:
             return None
 
-    def _render_selected(self) -> None:
+    def _render_selected(self, states: Sequence[LoopState] | None = None) -> None:
         try:
             loop_summary = self.query_one("#loop_summary", Static)
             actions_status = self.query_one("#actions-status", Static)
@@ -3016,11 +3098,14 @@ class LoopDashboard(App[None]):
             modern_layout = False
         log_meta = self.query_one("#log_meta", Static)
         log_view = self.query_one("#log_view", Static)
-        state = self._selected_state()
+        state = self._selected_state(states)
         if modern_layout:
             self._sync_config_form_from_state(state)
         self._refresh_workspace_branch(state)
-        self._render_summary_bar()
+        if states is None:
+            self._render_summary_bar()
+        else:
+            self._render_summary_bar(states)
         if modern_layout:
             loop_summary.update(self._loop_summary_text(state))
             actions_status.update(self._actions_status_text(state))
@@ -3031,7 +3116,11 @@ class LoopDashboard(App[None]):
             ops_snapshot.update(self._ops_snapshot_text(state))
             schedule_preview.update(self._schedule_card_text(state))
             safety_preview.update(self._safety_card_text(state))
-            metrics_today.update(self._metrics_today_text())
+            metrics_today.update(
+                self._metrics_today_text()
+                if states is None
+                else self._metrics_today_text(states)
+            )
             notifications_preview.update(self._notifications_text())
             schedule_preview.remove_class("detail-preview-hidden")
             safety_preview.remove_class("detail-preview-hidden")
@@ -3044,7 +3133,11 @@ class LoopDashboard(App[None]):
             return
         if state is None:
             log_meta.update(f"source {self.log_kind} · no loop selected")
-            log_view.update(self._empty_loop_message())
+            log_view.update(
+                self._empty_loop_message()
+                if states is None
+                else self._empty_loop_message(states)
+            )
             return
 
         paths = self.service.loop_paths(state.loop_id) if state.iterations else None
@@ -3071,7 +3164,11 @@ class LoopDashboard(App[None]):
 
     @on(DataTable.RowSelected)
     def on_loop_selected(self, event: DataTable.RowSelected) -> None:
-        self.selected_loop_id = str(event.row_key.value)
+        loop_id = str(event.row_key.value)
+        if loop_id not in self._visible_loop_ids:
+            return
+        self._clear_delete_confirmation()
+        self.selected_loop_id = loop_id
         self._draft_loop_selected = False
         self._render_selected()
 
@@ -3152,8 +3249,25 @@ class LoopDashboard(App[None]):
     @on(Input.Changed, "#loop-query")
     def on_loop_query_changed(self, event: Input.Changed) -> None:
         self.loop_query = event.value.strip()
-        self.delete_armed = False
+        self._clear_delete_confirmation()
         self.refresh_data()
+
+    @on(Input.Submitted, "#loop-query")
+    def on_loop_query_submitted(self, _event: Input.Submitted) -> None:
+        states = self._filtered_loops()
+        if not states:
+            return
+        visible_ids = {state.loop_id for state in states}
+        target = (
+            self.selected_loop_id
+            if self.selected_loop_id in visible_ids
+            else states[0].loop_id
+        )
+        self._clear_delete_confirmation()
+        self.selected_loop_id = target
+        self._draft_loop_selected = False
+        self.refresh_data()
+        self.query_one("#loops", DataTable).focus()
 
     @on(Select.Changed, "#workspace-recent")
     def on_recent_workspace_changed(self, event: Select.Changed) -> None:
@@ -3283,23 +3397,23 @@ class LoopDashboard(App[None]):
     def action_new_loop(self) -> None:
         self.selected_loop_id = None
         self._config_bound_loop_id = None
-        self.delete_armed = False
+        self._clear_delete_confirmation()
         self._draft_loop_selected = True
         self.refresh_data()
 
     def action_filter_running(self) -> None:
         self.filter_mode = "running"
-        self.delete_armed = False
+        self._clear_delete_confirmation()
         self.refresh_data()
 
     def action_filter_active(self) -> None:
         self.filter_mode = "active"
-        self.delete_armed = False
+        self._clear_delete_confirmation()
         self.refresh_data()
 
     def action_filter_all(self) -> None:
         self.filter_mode = "all"
-        self.delete_armed = False
+        self._clear_delete_confirmation()
         self.refresh_data()
 
     def action_set_log_stdout(self) -> None:
@@ -3431,6 +3545,25 @@ class LoopDashboard(App[None]):
         self._sync_button_state()
         self._render_selected()
 
+    def action_loop_query_focus(self) -> None:
+        query = self.query_one("#loop-query", Input)
+        query.focus()
+        select_all = getattr(query, "action_select_all", None)
+        if callable(select_all):
+            select_all()
+
+    def action_query_clear(self) -> None:
+        loop_query = self.query_one("#loop-query", Input)
+        if self.focused is loop_query:
+            if loop_query.value:
+                loop_query.value = ""
+                return
+            if self._visible_loop_ids:
+                self.query_one("#loops", DataTable).focus()
+            return
+        if self.log_kind == "memory":
+            self.action_memory_query_clear()
+
     def action_memory_query_focus(self) -> None:
         if self.log_kind != "memory":
             return
@@ -3518,13 +3651,13 @@ class LoopDashboard(App[None]):
 
     def action_pause_selected(self) -> None:
         if self.selected_loop_id:
-            self.delete_armed = False
+            self._clear_delete_confirmation()
             self.service.request_control(self.selected_loop_id, "pause")
             self.refresh_data()
 
     def action_resume_selected(self) -> None:
         if self.selected_loop_id:
-            self.delete_armed = False
+            self._clear_delete_confirmation()
             state = self._selected_state()
             if state is not None:
                 if not self._validate_workspace_root():
@@ -3551,7 +3684,7 @@ class LoopDashboard(App[None]):
 
     def action_stop_selected(self) -> None:
         if self.selected_loop_id:
-            self.delete_armed = False
+            self._clear_delete_confirmation()
             self.service.request_control(self.selected_loop_id, "stop")
             self.refresh_data()
 
@@ -3626,14 +3759,19 @@ class LoopDashboard(App[None]):
         states = self._filtered_loops()
         if not states:
             return
-        selected = self.selected_loop_id
-        index = 0
-        if selected:
-            for idx, item in enumerate(states):
-                if item.loop_id == selected:
-                    index = idx
-                    break
-        index = (index + delta) % len(states)
+        selected_index = next(
+            (
+                index
+                for index, item in enumerate(states)
+                if item.loop_id == self.selected_loop_id
+            ),
+            None,
+        )
+        if selected_index is None:
+            index = 0 if delta > 0 else len(states) - 1
+        else:
+            index = (selected_index + delta) % len(states)
+        self._clear_delete_confirmation()
         self.selected_loop_id = states[index].loop_id
         self._draft_loop_selected = False
         self.refresh_data()
@@ -3754,18 +3892,20 @@ class LoopDashboard(App[None]):
 
     def action_remove_selected(self) -> None:
         if self.selected_loop_id:
-            if not self.delete_armed:
+            selected_loop_id = self.selected_loop_id
+            if not self.delete_armed or self._delete_armed_loop_id != selected_loop_id:
                 self.delete_armed = True
-                self.notify(f"press d again to delete: {self.selected_loop_id}")
+                self._delete_armed_loop_id = selected_loop_id
+                self.notify(f"press d again to delete: {selected_loop_id}")
                 self._sync_button_state()
                 return
             try:
-                self.service.remove_loop(self.selected_loop_id, force=True)
+                self.service.remove_loop(selected_loop_id, force=True)
             except Exception as exc:
                 self.notify(str(exc), severity="error")
                 return
-            self.notify(f"removed: {self.selected_loop_id}")
-            self.delete_armed = False
+            self.notify(f"removed: {selected_loop_id}")
+            self._clear_delete_confirmation()
             self.selected_loop_id = None
             self.refresh_data()
 

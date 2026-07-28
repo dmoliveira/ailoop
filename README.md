@@ -203,8 +203,12 @@ TUI follow-up workflow:
 
 - set **Root directory** to the repo/workspace you want to run
 - type the base prompt in **AI LOOP CONFIG** and start or continue the loop
+- press `Ctrl+L` to search persisted loop IDs, states, modes, runners, agents, prompts, workspaces, and task files
+- press `Enter` to open a search result; `Esc` clears the focused loop search
+- combine search with `g` running, `a` active, or `l` all without changing the selected loop or unsaved form edits
 - type a one-shot instruction in **Follow-up for next iteration** and queue it with the button or `Ctrl+Enter`
 - use `Shift+N` for one unchanged next iteration and `Ctrl+J` / `Ctrl+K` to switch loops
+- `Ctrl+J` / `Ctrl+K` leave an editor on the first press, then switch visible loops without changing editor text
 - the `6 history` panel now shows recent workspace prompt/follow-up/result history plus loop iteration history
 
 TUI memory smoke:

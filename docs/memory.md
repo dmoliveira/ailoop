@@ -88,6 +88,9 @@ Memory filters:
 
 Memory navigation + actions:
 
+- `/`: focus memory search while a memory view is active
+- `Esc`: clear the focused memory search
+- `Ctrl+L`: focus loop search from anywhere in the dashboard
 - `[` / `]`: move between visible memory entries
 - `b` / `n`: cycle label filters
 - `c`: clear active label filter

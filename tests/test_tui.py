@@ -4,7 +4,8 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from textual.widgets import DataTable, TextArea
+from textual.binding import Binding
+from textual.widgets import DataTable, Input, TextArea
 
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig
@@ -12,11 +13,39 @@ from ailoop.service import LoopService
 from ailoop.tui import (
     LoopDashboard,
     launch_in_tmux,
+    loop_matches_query,
     process_rss_bytes,
     read_events,
     render_progress_text,
     tail_text,
 )
+
+
+def make_loop_config(
+    *,
+    prompt: str = "Review the repo",
+    runner: str = "echo",
+    agent: str | None = "orchestrator",
+    workspace_root: str | None = None,
+    task_file: str | None = None,
+) -> LoopRunConfig:
+    return LoopRunConfig(
+        prompt=prompt,
+        runner=runner,
+        agent=agent,
+        steps=3,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+        workspace_root=workspace_root,
+        task_file=task_file,
+    )
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
@@ -633,7 +662,8 @@ def test_summary_bar_text_prioritizes_selected_loop_context() -> None:
 def test_footer_base_text_mentions_metrics_and_memory_shortcuts() -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
 
-    assert app._footer_base_text(width=80) == "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q"
+    assert app._footer_base_text(width=80) == "Ctrl+L · ↑↓ · g/a/l · 1-7/f/h/m/0 · r/q"
+    assert "Ctrl+L search" in app._footer_base_text(width=140)
     assert "logs 1-7/f/h/m/0" in app._footer_base_text(width=140)
 
 
@@ -971,7 +1001,7 @@ def test_memory_help_text_uses_compact_footer_at_80_columns(tmp_path: Path) -> N
     app.memory = memory
     app.log_kind = "memory"
     text = app._memory_help_text(width=80)
-    assert "↑↓ filt g/a/l · 1-7/f/h/m/0 · r/q" in text
+    assert "Ctrl+L · ↑↓ · g/a/l · 1-7/f/h/m/0 · r/q" in text
     assert "mem:all" in text
     assert "cwd" in text
     assert "ent:1" in text
@@ -3384,13 +3414,23 @@ def test_spawn_replay_passes_all_folders_scope(monkeypatch) -> None:
 
 
 def test_workspace_loop_shortcuts_are_registered() -> None:
-    bindings = {binding[0]: binding[1] for binding in LoopDashboard.BINDINGS}
+    bindings = {
+        binding.key if isinstance(binding, Binding) else binding[0]: (
+            binding.action if isinstance(binding, Binding) else binding[1]
+        )
+        for binding in LoopDashboard.BINDINGS
+    }
+    priority_keys = {
+        binding.key for binding in LoopDashboard.BINDINGS if isinstance(binding, Binding)
+    }
+    assert bindings["ctrl+l"] == "loop_query_focus"
     assert bindings["ctrl+j"] == "loop_next"
     assert bindings["ctrl+k"] == "loop_prev"
     assert bindings["shift+n"] == "next_iteration"
     assert bindings["i"] == "follow_up_focus"
     assert bindings["ctrl+enter"] == "queue_follow_up_shortcut"
     assert bindings["ctrl+g"] == "queue_follow_up_shortcut"
+    assert {"ctrl+l", "ctrl+j", "ctrl+k"} <= priority_keys
 
 
 def test_existing_loop_uses_edited_workspace_root(tmp_path: Path) -> None:
@@ -3685,6 +3725,391 @@ def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) 
             await pilot.pause()
             assert app.selected_loop_id == second_state.loop_id
             assert str(app.query_one("#workspace-current-branch").render()) == "branch-second"
+
+            config_prompt.text = "another unsaved draft"
+            config_prompt.focus()
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            assert app.focused is app.query_one("#loops", DataTable)
+            assert app.selected_loop_id == second_state.loop_id
+            assert config_prompt.text == "another unsaved draft"
+            await pilot.press("ctrl+k")
+            await pilot.pause()
+            assert app.selected_loop_id == first_state.loop_id
+            assert str(app.query_one("#workspace-current-branch").render()) == "branch-first"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_loop_query_matches_persisted_fields_with_casefold(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    workspace = tmp_path / "Customer-Portal"
+    workspace.mkdir()
+    state = service.create_loop(
+        make_loop_config(
+            prompt="Review the Straße payment flow",
+            runner="opencode",
+            agent="orchestrator",
+            workspace_root=str(workspace),
+            task_file=str(workspace / "release-tasks.md"),
+        ),
+        loop_id="billing-review",
+    )
+    state.status = "pause_requested"
+    state.dashboard_config = {"mode": "scheduled"}
+    state.queued_follow_up = "not part of search"
+
+    for query in (
+        "BILLING",
+        "pause_requested",
+        "PAUSING",
+        "scheduled",
+        "OpenCode",
+        "ORCHESTRATOR",
+        "STRASSE",
+        "customer-portal",
+        "RELEASE-TASKS",
+    ):
+        assert loop_matches_query(state, query)
+    assert loop_matches_query(state, "  ")
+    assert not loop_matches_query(state, "not part of search")
+
+
+def test_filtered_loops_composes_status_and_query_without_reordering(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    running = service.create_loop(
+        make_loop_config(prompt="Alpha running review"), loop_id="running-alpha"
+    )
+    running.status = "running"
+    service.store.save(running)
+    paused = service.create_loop(
+        make_loop_config(prompt="Alpha paused review"), loop_id="paused-alpha"
+    )
+    paused.status = "paused"
+    service.store.save(paused)
+    completed = service.create_loop(
+        make_loop_config(prompt="Alpha completed review"), loop_id="completed-alpha"
+    )
+    completed.status = "completed"
+    service.store.save(completed)
+
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.filter_mode = "active"
+    app.loop_query = "alpha"
+    all_states = service.list_loops()
+
+    filtered = app._filtered_loops(all_states)
+
+    assert [state.loop_id for state in filtered] == [
+        state.loop_id
+        for state in all_states
+        if state.status in {"running", "pause_requested", "stop_requested", "paused", "idle"}
+    ]
+    assert app.filter_mode == "active"
+
+
+def test_loop_query_preserves_hidden_selection_and_unsaved_form(tmp_path: Path) -> None:
+    first_workspace = tmp_path / "first-workspace"
+    second_workspace = tmp_path / "second-workspace"
+    edited_workspace = tmp_path / "edited-workspace"
+    first_workspace.mkdir()
+    second_workspace.mkdir()
+    edited_workspace.mkdir()
+    service = LoopService(tmp_path / "state")
+    first = service.create_loop(
+        make_loop_config(prompt="First review", workspace_root=str(first_workspace)),
+        loop_id="first-review",
+    )
+    second = service.create_loop(
+        make_loop_config(prompt="Second review", workspace_root=str(second_workspace)),
+        loop_id="second-review",
+    )
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=first.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#config-prompt", TextArea).text = "unsaved prompt draft"
+            app.query_one("#workspace-root", Input).value = str(edited_workspace)
+            app.query_one("#follow-up-prompt", TextArea).text = "unsaved follow-up"
+            app.query_one("#loop-query", Input).value = "second-workspace"
+            await pilot.pause()
+
+            table = app.query_one("#loops", DataTable)
+            assert app.selected_loop_id == first.loop_id
+            assert app.filter_mode == "all"
+            assert table.row_count == 1
+            assert table.get_row(second.loop_id)
+            assert app.query_one("#config-prompt", TextArea).text == "unsaved prompt draft"
+            assert app.query_one("#workspace-root", Input).value == str(edited_workspace)
+            assert app.query_one("#follow-up-prompt", TextArea).text == "unsaved follow-up"
+            assert "outside results" in str(app.query_one("#sidebar_stats").render())
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_loop_query_keyboard_focus_submit_and_clear(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    first = service.create_loop(make_loop_config(prompt="Alpha"), loop_id="alpha-loop")
+    second = service.create_loop(make_loop_config(prompt="Beta"), loop_id="beta-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=first.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            config_prompt = app.query_one("#config-prompt", TextArea)
+            config_prompt.text = "keep this draft"
+            config_prompt.focus()
+
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            loop_query = app.query_one("#loop-query", Input)
+            assert app.focused is loop_query
+            assert config_prompt.text == "keep this draft"
+
+            loop_query.value = "beta"
+            await pilot.pause()
+            assert app.selected_loop_id == first.loop_id
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.selected_loop_id == second.loop_id
+            assert app.focused is app.query_one("#loops", DataTable)
+
+            await pilot.press("ctrl+l")
+            await pilot.pause()
+            assert app.focused is loop_query
+            await pilot.press("escape")
+            await pilot.pause()
+            assert loop_query.value == ""
+            assert app.focused is loop_query
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.focused is app.query_one("#loops", DataTable)
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_loop_query_zero_results_has_no_selectable_sentinel(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_loop_config(), loop_id="only-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            query = app.query_one("#loop-query", Input)
+            table = app.query_one("#loops", DataTable)
+            query.value = "missing"
+            await pilot.pause()
+            assert table.row_count == 0
+            assert table.cursor_type == "none"
+            assert table.show_cursor is False
+            assert app.selected_loop_id == state.loop_id
+            assert "No loops match" in str(app.query_one("#sidebar_stats").render())
+
+            query.value = ""
+            await pilot.pause()
+            assert table.row_count == 1
+            assert table.cursor_type == "row"
+            assert table.show_cursor is True
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_external_loop_deletion_detaches_without_erasing_draft(tmp_path: Path) -> None:
+    original_workspace = tmp_path / "original-workspace"
+    edited_workspace = tmp_path / "edited-workspace"
+    original_workspace.mkdir()
+    edited_workspace.mkdir()
+    service = LoopService(tmp_path / "state")
+    selected = service.create_loop(
+        make_loop_config(workspace_root=str(original_workspace)),
+        loop_id="selected-loop",
+    )
+    other = service.create_loop(make_loop_config(), loop_id="other-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=selected.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.query_one("#config-prompt", TextArea).text = "preserved prompt"
+            app.query_one("#workspace-root", Input).value = str(edited_workspace)
+            app.query_one("#follow-up-prompt", TextArea).text = "preserved follow-up"
+
+            service.remove_loop(selected.loop_id, force=True)
+            app.refresh_data()
+            assert app.selected_loop_id is None
+            assert app.query_one("#config-prompt", TextArea).text == "preserved prompt"
+            assert app.query_one("#workspace-root", Input).value == str(edited_workspace)
+            assert app.query_one("#follow-up-prompt", TextArea).text == "preserved follow-up"
+            assert app.query_one("#loops", DataTable).get_row(other.loop_id)
+
+            app.refresh_data()
+            assert app.selected_loop_id is None
+            assert app.query_one("#config-prompt", TextArea).text == "preserved prompt"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_refresh_uses_one_full_loop_scan(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_loop_config(), loop_id="scan-once")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            original_list_loops = service.list_loops
+            call_count = 0
+
+            def counted_list_loops():  # type: ignore[no-untyped-def]
+                nonlocal call_count
+                call_count += 1
+                return original_list_loops()
+
+            service.list_loops = counted_list_loops  # type: ignore[method-assign]
+            app.refresh_data()
+            assert call_count == 1
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_refresh_is_a_noop_when_the_app_is_not_running(tmp_path: Path) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = LoopService(tmp_path / "state")
+    app.service.list_loops = lambda: pytest.fail("refresh scanned after shutdown")  # type: ignore[method-assign]
+
+    app.refresh_data()
+
+
+def test_on_mount_refresh_populates_without_manual_refresh(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_loop_config(), loop_id="mounted-refresh")
+    state.status = "running"
+    service.store.save(state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.selected_loop_id == state.loop_id
+            assert app.query_one("#loops", DataTable).get_row(state.loop_id)
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_delete_confirmation_is_cleared_when_selection_changes(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    first = service.create_loop(make_loop_config(), loop_id="delete-first")
+    second = service.create_loop(make_loop_config(), loop_id="delete-second")
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=first.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.action_remove_selected()
+            assert app.delete_armed is True
+            assert app._delete_armed_loop_id == first.loop_id
+
+            app.query_one("#loops", DataTable).focus()
+            app._move_loop_selection(1)
+            assert app.selected_loop_id == second.loop_id
+            assert app.delete_armed is False
+            assert app._delete_armed_loop_id is None
+
+            app.action_remove_selected()
+            assert {state.loop_id for state in service.list_loops()} == {
+                first.loop_id,
+                second.loop_id,
+            }
+            assert app._delete_armed_loop_id == second.loop_id
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_stale_loop_row_events_are_ignored() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.selected_loop_id = "real-loop"
+    app._visible_loop_ids = {"real-loop"}
+    event = type(
+        "RowEvent",
+        (),
+        {"row_key": type("RowKey", (), {"value": "empty"})()},
+    )()
+
+    app.on_loop_selected(event)  # type: ignore[arg-type]
+
+    assert app.selected_loop_id == "real-loop"
+
+
+def test_memory_search_shortcuts_remain_contextual(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path / "memory")
+    memory.create(
+        kind="preset",
+        title="Review preset",
+        run_config=make_loop_config(),
+        folder=Path.cwd(),
+    )
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.memory = memory
+        async with app.run_test() as pilot:
+            app.action_set_log_memory()
+            app.query_one("#loops", DataTable).focus()
+            await pilot.press("/")
+            await pilot.pause()
+            memory_query = app.query_one("#memory-query", Input)
+            assert app.focused is memory_query
+            memory_query.value = "review"
+            await pilot.pause()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert memory_query.value == ""
+            assert app.memory_query == ""
+            assert app.query_one("#loop-query", Input).value == ""
 
     import asyncio
 
