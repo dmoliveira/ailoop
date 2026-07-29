@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import shutil
+import stat
 import time
 import uuid
 from contextlib import nullcontext
@@ -142,21 +144,64 @@ class LoopService:
     def list_loops(self) -> list[LoopState]:
         return self.store.list_states()
 
+    def _safe_log_dir(self, loop_id: str, *, create: bool) -> Path:
+        logs = log_dir(self.state_root, loop_id)
+        loop_root = raw_loop_dir(self.state_root, loop_id).resolve()
+        if create and not logs.exists():
+            logs.mkdir(mode=0o700)
+        if logs.is_symlink() or not logs.is_dir() or logs.resolve().parent != loop_root:
+            raise RuntimeError(f"Unsafe loop logs directory: {logs}")
+        return logs
+
     def loop_paths(self, loop_id: str, iteration: int | None = None) -> dict[str, Path]:
         state = self.store.load(loop_id)
         if not state.iterations and iteration is None:
             raise FileNotFoundError(f"Loop has no iterations yet: {loop_id}")
 
         selected_iteration = iteration or state.completed_iterations or state.current_iteration
-        logs = log_dir(self.state_root, loop_id)
+        logs = self._safe_log_dir(loop_id, create=False)
         prefix = logs / f"iteration-{selected_iteration:04d}"
         directory = raw_loop_dir(self.state_root, loop_id)
+        record = next(
+            (item for item in state.iterations if item.number == selected_iteration),
+            None,
+        )
+
+        def evidence_path(value: str | None, fallback: Path, suffix: str) -> Path:
+            if fallback.is_symlink() or (
+                fallback.exists() and not stat.S_ISREG(fallback.stat().st_mode)
+            ):
+                raise RuntimeError(f"Unsafe loop evidence path: {fallback}")
+            if not value:
+                return fallback
+            candidate = Path(value).resolve()
+            logs_root = logs.resolve()
+            if (
+                candidate.parent == logs_root
+                and candidate.name.startswith(f"iteration-{selected_iteration:04d}")
+                and candidate.name.endswith(suffix)
+            ):
+                return candidate
+            return fallback
+
         return {
             "state": directory / "state.json",
             "events": directory / "events.jsonl",
-            "prompt": prefix.with_suffix(".prompt.txt"),
-            "stdout": prefix.with_suffix(".stdout.log"),
-            "stderr": prefix.with_suffix(".stderr.log"),
+            "prompt": evidence_path(
+                record.prompt_file if record else None,
+                prefix.with_suffix(".prompt.txt"),
+                ".prompt.txt",
+            ),
+            "stdout": evidence_path(
+                record.stdout_log if record else None,
+                prefix.with_suffix(".stdout.log"),
+                ".stdout.log",
+            ),
+            "stderr": evidence_path(
+                record.stderr_log if record else None,
+                prefix.with_suffix(".stderr.log"),
+                ".stderr.log",
+            ),
         }
 
     def remove_loop(self, loop_id: str, force: bool = False) -> None:
@@ -527,10 +572,10 @@ class LoopService:
         state = claim.state
         iteration_number = claim.number
         iteration = IterationRecord(number=iteration_number, started_at=utc_now())
-        logs = ensure_dir(log_dir(self.state_root, state.loop_id))
-        prompt_path = logs / f"iteration-{iteration_number:04d}.prompt.txt"
-        stdout_path = logs / f"iteration-{iteration_number:04d}.stdout.log"
-        stderr_path = logs / f"iteration-{iteration_number:04d}.stderr.log"
+        logs = self._safe_log_dir(state.loop_id, create=True)
+        execution_id = uuid.uuid4().hex
+        execution_prefix = logs / f"iteration-{iteration_number:04d}-{execution_id}"
+        prompt_path = execution_prefix.with_suffix(".prompt.txt")
         recent_workspace_history = (
             self.workspace_history.recent_entries(
                 state.run_config.workspace_root,
@@ -545,12 +590,24 @@ class LoopService:
             iteration_number,
             recent_workspace_history=recent_workspace_history,
         )
-        prompt_path.write_text(prompt_text, encoding="utf-8")
+        prompt_flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        prompt_fd = os.open(prompt_path, prompt_flags, 0o600)
+        with os.fdopen(prompt_fd, "w", encoding="utf-8") as prompt_handle:
+            prompt_handle.write(prompt_text)
         iteration.prompt_file = str(prompt_path)
 
         attempt = 0
         result = None
         while attempt <= state.run_config.retry_count:
+            attempt_prefix = Path(f"{execution_prefix}.attempt-{attempt + 1:04d}")
+            stdout_path = Path(f"{attempt_prefix}.stdout.log")
+            stderr_path = Path(f"{attempt_prefix}.stderr.log")
             args = [
                 item.format(
                     prompt=prompt_text,

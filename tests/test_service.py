@@ -227,6 +227,94 @@ def test_loop_runs_and_persists_state(tmp_path: Path) -> None:
     assert loaded.completed_iterations == 2
 
 
+def test_retry_attempts_keep_distinct_log_evidence(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    marker = tmp_path / "attempt.txt"
+    run_config = make_service_run_config()
+    run_config.steps = 1
+    run_config.retry_count = 1
+    run_config.runner_args = [
+        "-c",
+        (
+            "from pathlib import Path; import sys; "
+            f"p=Path({str(marker)!r}); n=int(p.read_text())+1 if p.exists() else 1; "
+            "p.write_text(str(n)); print(f'out-{{n}}'); print(f'err-{{n}}', file=sys.stderr); "
+            "raise SystemExit(1 if n == 1 else 0)"
+        ),
+    ]
+    state = service.create_loop(run_config, loop_id="retry-evidence")
+
+    final = service.run_loop(state.loop_id)
+
+    logs = raw_loop_dir(service.state_root, state.loop_id) / "logs"
+    stdout_logs = sorted(logs.glob("iteration-0001-*.attempt-*.stdout.log"))
+    stderr_logs = sorted(logs.glob("iteration-0001-*.attempt-*.stderr.log"))
+    assert len(stdout_logs) == 2
+    assert len(stderr_logs) == 2
+    assert [path.read_text().strip() for path in stdout_logs] == ["out-1", "out-2"]
+    assert [path.read_text().strip() for path in stderr_logs] == ["err-1", "err-2"]
+    assert Path(final.iterations[-1].stdout_log or "") == stdout_logs[-1]
+    assert service.loop_paths(state.loop_id)["stdout"] == stdout_logs[-1]
+
+
+def test_reset_restart_does_not_overwrite_prior_evidence(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    run_config = make_service_run_config()
+    run_config.steps = 1
+    state = service.create_loop(run_config, loop_id="reset-evidence")
+    first = service.run_loop(state.loop_id)
+    old_stdout = Path(first.iterations[-1].stdout_log or "")
+    old_bytes = old_stdout.read_bytes()
+
+    service.request_restart(
+        state.loop_id,
+        run_config,
+        {},
+        {},
+        reset=True,
+    )
+    second = service.run_loop(state.loop_id)
+    new_stdout = Path(second.iterations[-1].stdout_log or "")
+
+    assert new_stdout != old_stdout
+    assert old_stdout.read_bytes() == old_bytes
+    assert new_stdout.is_file()
+    assert service.loop_paths(state.loop_id)["stdout"] == new_stdout
+
+
+def test_loop_paths_rejects_symlinked_logs_directory(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    run_config = make_service_run_config()
+    run_config.steps = 1
+    state = service.create_loop(run_config, loop_id="unsafe-logs")
+    service.run_loop(state.loop_id)
+    logs = raw_loop_dir(service.state_root, state.loop_id) / "logs"
+    preserved = tmp_path / "preserved-logs"
+    logs.rename(preserved)
+    external = tmp_path / "external"
+    external.mkdir()
+    logs.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Unsafe loop logs directory"):
+        service.loop_paths(state.loop_id)
+
+
+def test_run_rejects_symlinked_logs_directory(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    run_config = make_service_run_config()
+    run_config.steps = 1
+    state = service.create_loop(run_config, loop_id="unsafe-write-logs")
+    logs = raw_loop_dir(service.state_root, state.loop_id) / "logs"
+    external = tmp_path / "external-write"
+    external.mkdir()
+    logs.symlink_to(external, target_is_directory=True)
+
+    with pytest.raises(RuntimeError, match="Unsafe loop logs directory"):
+        service.run_loop(state.loop_id)
+
+    assert list(external.iterdir()) == []
+
+
 def test_pause_request_is_recorded(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(

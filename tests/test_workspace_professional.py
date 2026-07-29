@@ -1,8 +1,11 @@
+import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 
 from ailoop.models import IterationRecord, LoopRunConfig, LoopState
+from ailoop.paths import workspace_history_file
 from ailoop.service import LoopService
 from ailoop.workspace_history import WorkspaceHistoryEntry, WorkspaceHistoryStore
 
@@ -23,6 +26,57 @@ def build_run_config() -> LoopRunConfig:
         runner_command="python3",
         runner_args=["-c", "print('ok')"],
     )
+
+
+def test_concurrent_history_compaction_preserves_every_entry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = str(tmp_path / "workspace")
+    store = WorkspaceHistoryStore(tmp_path / "state")
+    monkeypatch.setattr("ailoop.workspace_history.HISTORY_MAX_BYTES", 1)
+    monkeypatch.setattr("ailoop.workspace_history.HISTORY_RETAIN_LINES", 100)
+
+    def append(index: int) -> None:
+        store.append(
+            WorkspaceHistoryEntry(
+                recorded_at=str(index),
+                workspace_root=root,
+                workspace_hash="hash",
+                loop_id=f"loop-{index}",
+                kind="prompt",
+                prompt=f"prompt-{index}",
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(append, range(40)))
+
+    path = workspace_history_file(store.state_root, root)
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert {row["loop_id"] for row in rows} == {f"loop-{index}" for index in range(40)}
+
+
+def test_workspace_history_rejects_symlinked_storage(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    workspace = str(tmp_path / "workspace")
+    path = workspace_history_file(state_root, workspace)
+    path.parent.parent.mkdir(parents=True)
+    external = tmp_path / "external"
+    external.mkdir()
+    path.parent.symlink_to(external, target_is_directory=True)
+    store = WorkspaceHistoryStore(state_root)
+    entry = WorkspaceHistoryEntry(
+        recorded_at="now",
+        workspace_root=workspace,
+        workspace_hash="hash",
+        loop_id="loop",
+        kind="prompt",
+        prompt="safe",
+    )
+
+    with pytest.raises(RuntimeError, match="Unsafe workspace history directory"):
+        store.append(entry)
 
 
 def test_loop_state_ignores_unknown_persisted_fields() -> None:
