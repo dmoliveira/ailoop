@@ -95,6 +95,89 @@ def test_create_loop_rolls_back_all_recoverable_creation_failures(
         service.load_loop("creation-rollback")
 
 
+@pytest.mark.parametrize("event_failure", ["false", "exception"])
+@pytest.mark.parametrize(
+    "operation",
+    ["control", "resume", "follow-up", "clear-follow-up", "single-iteration"],
+)
+def test_committed_intents_survive_event_failures(
+    tmp_path: Path,
+    monkeypatch,
+    operation: str,
+    event_failure: str,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_service_run_config(), loop_id=f"intent-{operation}")
+    if operation == "clear-follow-up":
+        service.queue_follow_up(state.loop_id, "queued")
+
+    if event_failure == "false":
+        monkeypatch.setattr(service.store, "append_event", lambda *_args, **_kwargs: False)
+    else:
+        monkeypatch.setattr(
+            service.store,
+            "append_event",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("event unavailable")),
+        )
+
+    if operation == "control":
+        result = service.request_control(state.loop_id, "pause")
+        assert result.status == "paused"
+    elif operation == "resume":
+        result = service.request_resume(state.loop_id)
+        assert result.control == "run"
+    elif operation == "follow-up":
+        result = service.queue_follow_up(state.loop_id, "run this", run_next=True)
+        assert result.pending_single_iteration is True
+    elif operation == "clear-follow-up":
+        result = service.clear_follow_up(state.loop_id)
+        assert result.queued_follow_up is None
+    elif operation == "single-iteration":
+        result = service.request_single_iteration(state.loop_id)
+        assert result.pending_single_iteration is True
+    assert service.load_loop(state.loop_id).to_dict() == result.to_dict()
+
+
+def test_postcommit_event_does_not_swallow_keyboard_interrupt(tmp_path: Path, monkeypatch) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_service_run_config(), loop_id="event-interrupt")
+    monkeypatch.setattr(
+        service.store,
+        "append_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(KeyboardInterrupt()),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        service.request_control(state.loop_id, "pause")
+
+    assert service.load_loop(state.loop_id).status == "paused"
+
+
+def test_precommit_state_failure_still_raises_without_event_attempt(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_service_run_config(), loop_id="state-before-event")
+    event_attempts: list[dict] = []
+    monkeypatch.setattr(
+        service.store,
+        "_write_unlocked",
+        lambda _state: (_ for _ in ()).throw(OSError("state unavailable")),
+    )
+    monkeypatch.setattr(
+        service.store,
+        "append_event",
+        lambda _loop_id, event: event_attempts.append(event) or True,
+    )
+
+    with pytest.raises(OSError, match="state unavailable"):
+        service.request_control(state.loop_id, "pause")
+
+    assert event_attempts == []
+    assert service.load_loop(state.loop_id).status == "idle"
+
+
 def test_create_loop_reports_creation_and_rollback_failures(tmp_path: Path, monkeypatch) -> None:
     service = LoopService(tmp_path)
     monkeypatch.setattr(
