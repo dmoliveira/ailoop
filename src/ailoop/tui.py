@@ -8,7 +8,7 @@ import shlex
 import shutil
 import subprocess
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -35,6 +35,30 @@ RUNNING_STATUSES = {"running", "pause_requested", "stop_requested", "cleanup_fai
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
 COMPACT_LAYOUT_WIDTH = 100
 DRAFT_BOUND_ID = "__defaults__"
+PLANNING_ONLY_CONTROL_IDS = (
+    "workspace-branch-strategy",
+    "safety-autonomy",
+    "safety-ask-before-commit",
+    "safety-ask-before-push",
+    "safety-auto-commit",
+    "safety-auto-push",
+    "safety-create-backup-branch",
+    "safety-auto-stop-on-limit",
+    "safety-max-runtime",
+    "safety-max-files-changed",
+    "safety-max-commits",
+    "safety-max-token-usage",
+    "safety-max-cost",
+    "notify-start",
+    "notify-success",
+    "notify-failure",
+    "notify-limit",
+    "notify-complete",
+    "notify-terminal",
+    "notify-slack",
+    "notify-email",
+)
+RECOVERABLE_SERVICE_ERRORS = (OSError, RuntimeError, ValueError)
 
 
 def launch_in_tmux(config_path: Path, loop_id: str | None = None) -> None:
@@ -1063,7 +1087,7 @@ class LoopDashboard(App[None]):
                                     [
                                         ("Fixed Count", "fixed"),
                                         ("Infinite", "infinite"),
-                                        ("Scheduled", "scheduled"),
+                                        ("Scheduled draft (save only)", "scheduled"),
                                     ],
                                     value=str(defaults["mode"]),
                                     id="config-mode",
@@ -1143,8 +1167,8 @@ class LoopDashboard(App[None]):
                             id="workspace-recent",
                         )
                         yield Static(
-                            "Root is enforced as runner cwd. Other scope/safety settings "
-                            "are saved planning metadata.",
+                            "Root is enforced as runner cwd. Branch strategy is saved planning "
+                            "metadata and is not enforced.",
                             classes="mini-note",
                         )
                         with Horizontal(classes="form-row"):
@@ -1256,6 +1280,10 @@ class LoopDashboard(App[None]):
                 with Vertical(id="safety_card", classes="right-card"):
                     yield Static("BEHAVIOUR & SAFETY", classes="panel-title")
                     yield Static(id="safety-preview", classes="mini-note detail-preview-hidden")
+                    yield Static(
+                        "Saved planning metadata only; ailoop does not enforce these controls.",
+                        classes="mini-note",
+                    )
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
                             yield Static("Autonomy level", classes="section-title")
@@ -1332,6 +1360,10 @@ class LoopDashboard(App[None]):
                     yield Static(
                         id="notifications-preview",
                         classes="mini-note detail-preview-hidden",
+                    )
+                    yield Static(
+                        "Saved planning metadata only; no notifications are sent.",
+                        classes="mini-note",
                     )
                     with Horizontal(classes="form-row"):
                         with Vertical(classes="field-group"):
@@ -1579,6 +1611,11 @@ class LoopDashboard(App[None]):
         set_disabled("#schedule-every", schedule_type == "continuous", Input)
         set_disabled("#schedule-start-time", schedule_type == "continuous", Input)
         set_disabled("#schedule-timezone", schedule_type == "continuous", Select)
+        for control_id in PLANNING_ONLY_CONTROL_IDS:
+            try:
+                self.query_one(f"#{control_id}").disabled = True  # type: ignore[attr-defined]
+            except Exception:
+                continue
 
     def _sync_schedule_with_config(self) -> None:
         mode = self._config_mode_value()
@@ -1946,13 +1983,17 @@ class LoopDashboard(App[None]):
                 return f"mem {self.memory_filter} · lab {label_count} · sel {compact_id}"
             return f"memory {self.memory_filter} · labels {label_count} · selected {entry.id}"
         if state is None:
+            if self._config_mode_value() == "scheduled":
+                if compact:
+                    return "sched draft · no worker"
+                return "scheduled draft · saved metadata only · no scheduler or worker"
             if compact:
                 return "sel none"
             return "selected none"
         loop_state = state
         mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
         schedule_hint = (
-            "scheduler unavailable"
+            "draft/no worker"
             if mode == "scheduled"
             else compact_countdown_text(self._selected_schedule_countdown_text(loop_state))
         )
@@ -2043,6 +2084,11 @@ class LoopDashboard(App[None]):
 
     def _loop_summary_text(self, state: object | None) -> str:
         if state is None:
+            if self._config_mode_value() == "scheduled":
+                return (
+                    "[b][#4ea3ff]LOOP SUMMARY[/][/]\n\nScheduled draft — saved metadata "
+                    "only.\nNo scheduler or worker will run it."
+                )
             return (
                 "[b][#4ea3ff]LOOP SUMMARY[/][/]\n\nNo loop selected.\n"
                 "Use the left sidebar to choose a loop or run a new one from the config panel."
@@ -2087,10 +2133,11 @@ class LoopDashboard(App[None]):
                 loop_line,
                 mode_line,
                 (
-                    f"Schedule: saved · scheduler unavailable · {branch_strategy} · {autonomy}"
+                    "Schedule: saved draft metadata only · no scheduler or worker"
                     if mode == "scheduled"
-                    else f"Next: {next_run} · {branch_strategy} · {autonomy}"
+                    else f"Next: {next_run}"
                 ),
+                f"Plan only (not enforced): {branch_strategy} · {autonomy}",
                 f"Scope: {workspace_root} · branch {self.current_branch}",
                 (
                     f"Runner/Agent: {loop_state.run_config.runner} · "  # type: ignore[attr-defined]
@@ -2123,10 +2170,10 @@ class LoopDashboard(App[None]):
         return "\n".join(
             [
                 f"root: {root}",
-                f"include: {include_count} patterns",
-                f"exclude: {exclude_count} patterns",
+                f"include plan (not enforced): {include_count} patterns",
+                f"exclude plan (not enforced): {exclude_count} patterns",
                 f"branch: {self.current_branch}",
-                f"strategy: {branch_strategy}",
+                f"strategy plan (not enforced): {branch_strategy}",
                 f"schedule: {schedule_scope}",
                 f"quiet-hours: {quiet_hours}",
                 "workspace root is enforced as runner cwd",
@@ -2137,6 +2184,8 @@ class LoopDashboard(App[None]):
         mode, schedule_type, schedule_every = self._state_mode_and_schedule(state)
         schedule_scope = schedule_type_label(schedule_type, schedule_every)
         if state is None:
+            if mode == "scheduled":
+                return "Scheduled draft · saved metadata only · no scheduler or worker will run it"
             return f"Draft config · new loop launch · mode {mode} · schedule {schedule_scope}"
         loop_state = state
         return (
@@ -2181,7 +2230,7 @@ class LoopDashboard(App[None]):
         scheduled = self._state_mode_and_schedule(loop_state)[0] == "scheduled"
         if not loop_state.iterations:  # type: ignore[attr-defined]
             if scheduled:
-                lines.append("Saved configuration · scheduler unavailable")
+                lines.append("Saved draft metadata · no scheduler or worker")
                 return "\n".join(lines)
             lines.append("#1 Queue · waiting")
             if target:
@@ -2214,15 +2263,30 @@ class LoopDashboard(App[None]):
 
     def _actions_status_text(self, state: object | None) -> str:
         if state is None:
+            if self._config_mode_value() == "scheduled":
+                return "Scheduled draft only; no scheduler or worker will run it."
             return "Draft loop ready to start from the current config."
         loop_state = state
         status = loop_state.status  # type: ignore[attr-defined]
         mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
         if mode == "scheduled":
-            queued = " · follow-up saved" if getattr(loop_state, "queued_follow_up", None) else ""
-            emergency_stop = " · emergency stop ready" if self._can_stop_control(loop_state) else ""
+            queued = (
+                " · follow-up draft saved" if getattr(loop_state, "queued_follow_up", None) else ""
+            )
+            if status == "cleanup_failed":
+                return (
+                    f"{short_loop_id(loop_state.loop_id)} · cleanup unconfirmed · "
+                    "refresh only; scheduler unavailable"
+                )
+            emergency_stop = (
+                " · emergency stop retry available"
+                if status == "stop_requested"
+                else " · emergency stop available"
+                if self._can_stop_control(loop_state)
+                else ""
+            )
             return (
-                f"{short_loop_id(loop_state.loop_id)} · saved configuration · "
+                f"{short_loop_id(loop_state.loop_id)} · saved draft configuration · "
                 f"scheduler unavailable{queued}{emergency_stop}"
             )
         actions: list[str] = []
@@ -2246,9 +2310,31 @@ class LoopDashboard(App[None]):
         if state is None:
             return False
         loop_state = state
+        if self._is_scheduled_fail_closed(loop_state):
+            return False
         if loop_state.status == "completed" and not self.service.should_continue(loop_state):  # type: ignore[arg-type]
             return False
         return True
+
+    def _can_clear_follow_up(self, state: object | None) -> bool:
+        if state is None or self._is_scheduled_fail_closed(state):
+            return False
+        try:
+            locked = self.service.store.is_locked(state.loop_id)  # type: ignore[attr-defined]
+        except OSError:
+            return False
+        return bool(
+            state.queued_follow_up  # type: ignore[attr-defined]
+            and not state.pending_single_iteration  # type: ignore[attr-defined]
+            and not locked
+        )
+
+    def _is_scheduled_fail_closed(self, state: object | None) -> bool:
+        return bool(
+            state is not None
+            and self._state_mode_and_schedule(state)[0] == "scheduled"
+            and state.status in RUNNING_STATUSES  # type: ignore[attr-defined]
+        )
 
     def _can_next_iteration(self, state: object | None) -> bool:
         if state is None:
@@ -2274,9 +2360,9 @@ class LoopDashboard(App[None]):
             return False
         status = state.status  # type: ignore[attr-defined]
         scheduled = self._state_mode_and_schedule(state)[0] == "scheduled"
-        return status in {"running", "pause_requested", "paused"} and (
-            not scheduled or status in {"running", "pause_requested", "stop_requested"}
-        )
+        if scheduled:
+            return status in {"running", "pause_requested", "stop_requested"}
+        return status in {"running", "pause_requested", "paused"}
 
     def _schedule_countdown_text(self) -> str:
         interval_kind = self._select_value("#schedule-type", self._config_interval_value())
@@ -2310,7 +2396,7 @@ class LoopDashboard(App[None]):
         if _mode == "scheduled":
             return (
                 f"Sched: {type_label} · every {raw_value} · start {start_time} · "
-                f"tz {timezone} · saved · scheduler unavailable"
+                f"tz {timezone} · saved draft metadata · no scheduler or worker"
             )
         countdown = self._selected_schedule_countdown_text(state)
         return (
@@ -2349,7 +2435,8 @@ class LoopDashboard(App[None]):
             f"{self._input_value('#safety-max-commits', '10')}"
         )
         return (
-            f"Safety: {autonomy} · {branch_strategy} · ask C {ask_commit}/P {ask_push} · "
+            "Safety plan (saved metadata; not enforced): "
+            f"{autonomy} · {branch_strategy} · ask C {ask_commit}/P {ask_push} · "
             f"auto C {auto_commit_text}/P {auto_push_text} · backup {backup_text} · "
             f"limits {limits} · stop {stop_text}"
         )
@@ -2391,7 +2478,7 @@ class LoopDashboard(App[None]):
         notify_slack = self._checkbox_value("#notify-slack", False)
         notify_email = self._checkbox_value("#notify-email", False)
         return (
-            "Notify: "
+            "Notification plan (saved metadata; no notifications sent): "
             f"start {'on' if self._checkbox_value('#notify-start', True) else 'off'} · "
             f"success {'on' if self._checkbox_value('#notify-success', True) else 'off'} · "
             f"failure {'on' if self._checkbox_value('#notify-failure', True) else 'off'} · "
@@ -2407,7 +2494,7 @@ class LoopDashboard(App[None]):
             return "[b][#4ea3ff]OPS SNAPSHOT[/][/]\n\nNo loop selected."
         scheduled = (getattr(state, "dashboard_config", {}) or {}).get("mode") == "scheduled"
         schedule_status = (
-            "saved · scheduler unavailable"
+            "saved draft · no scheduler or worker"
             if scheduled
             else compact_countdown_text(self._schedule_countdown_text()).removeprefix("next ")
         )
@@ -2446,10 +2533,12 @@ class LoopDashboard(App[None]):
         return "\n".join(
             [
                 "[b][#4ea3ff]OPS SNAPSHOT[/][/]",
-                f"Sched {schedule_status} · Safe {autonomy} {branch} · lim {limits}",
+                f"Sched {schedule_status} · Plan only, not enforced: {autonomy} {branch} · "
+                f"lim {limits}",
                 (
                     f"C/P {ask_commit}/{ask_push} · aC/P {auto_commit}/{auto_push} · "
-                    f"N {notify_states} · ch {notify_channels}"
+                    f"notification metadata {notify_states} · channels {notify_channels} · "
+                    "none sent"
                 ),
             ]
         )
@@ -2597,7 +2686,7 @@ class LoopDashboard(App[None]):
         can_resume = status in {"paused", "stopped", "failed", "idle"} or (
             status is None and self._form_supports_run()
         )
-        if state is not None and scheduled:
+        if scheduled:
             can_resume = False
         can_stop = self._can_stop_control(state)
         can_restart = not scheduled and status in {"paused", "stopped", "failed", "completed"}
@@ -2628,7 +2717,9 @@ class LoopDashboard(App[None]):
         self.query_one("#pause", Button).disabled = not can_pause
         try:
             self.query_one("#start-continue", Button).disabled = not can_resume
-            if state is None:
+            if scheduled:
+                start_label = "▶ Runtime Unavailable"
+            elif state is None:
                 start_label = "▶ Start"
             elif status in {"paused", "stopped", "failed"}:
                 start_label = "▶ Continue"
@@ -2645,11 +2736,8 @@ class LoopDashboard(App[None]):
             self.query_one("#queue-follow-up", Button).disabled = not self._can_queue_follow_up(
                 state
             ) or not bool(self._follow_up_text())
-            self.query_one("#clear-follow-up", Button).disabled = not bool(
-                state is not None
-                and state.queued_follow_up
-                and not state.pending_single_iteration
-                and not self.service.store.is_locked(state.loop_id)
+            self.query_one("#clear-follow-up", Button).disabled = not self._can_clear_follow_up(
+                state
             )
             self.query_one("#save-config", Button).disabled = status in {
                 "running",
@@ -2657,13 +2745,13 @@ class LoopDashboard(App[None]):
                 "stop_requested",
                 "cleanup_failed",
             }
-            self.query_one("#run-loop", Button).disabled = not self._form_supports_run() or bool(
-                scheduled and state is not None and state.pending_single_iteration
+            self.query_one("#run-loop", Button).disabled = (
+                not self._form_supports_run() or self._is_scheduled_fail_closed(state)
             )
             self.query_one("#restart-reset", Button).label = "↺ Reset Counter & Restart"
             self.query_one("#next-iteration", Button).label = "≫ Next Iteration"
             self.query_one("#queue-follow-up", Button).label = (
-                "Queue Follow-up (saved only)"
+                "Save Follow-up Draft"
                 if scheduled
                 else (
                     "Queue & Run Follow-up"
@@ -2671,10 +2759,12 @@ class LoopDashboard(App[None]):
                     else "Queue Follow-up"
                 )
             )
-            self.query_one("#clear-follow-up", Button).label = "Clear Queued"
+            self.query_one("#clear-follow-up", Button).label = (
+                "Clear Follow-up Draft" if scheduled else "Clear Queued"
+            )
             self.query_one("#save-config", Button).label = "Save Config"
             self.query_one("#run-loop", Button).label = (
-                "Save Schedule" if self._config_mode_value() == "scheduled" else "Run Loop"
+                "Save Schedule Draft" if self._config_mode_value() == "scheduled" else "Run Loop"
             )
         except Exception:
             pass
@@ -2719,20 +2809,31 @@ class LoopDashboard(App[None]):
             bar.update(self._memory_help_text())
             return
         if state is None:
-            bar.update(base + " · no loop selected · run from config or choose a loop")
+            if self._config_mode_value() == "scheduled":
+                bar.update(
+                    base
+                    + " · scheduled draft · save metadata only · no scheduler or worker will run it"
+                )
+            else:
+                bar.update(base + " · no loop selected · run from config or choose a loop")
             return
         loop_state = state.status  # type: ignore[attr-defined]
         if (getattr(state, "dashboard_config", {}) or {}).get("mode") == "scheduled":
-            actions = ["i edit follow-up", "ctrl+g queue follow-up"]
-            if self._can_stop_control(state):
-                actions.insert(0, "s emergency stop")
-            if state.status not in RUNNING_STATUSES:  # type: ignore[attr-defined]
-                actions.append("d confirm delete" if self.delete_armed else "d delete")
+            if state.status == "cleanup_failed":  # type: ignore[attr-defined]
+                bar.update(f"{base} · scheduled draft · cleanup unconfirmed · refresh only")
+                return
+            if state.status in {"running", "pause_requested", "stop_requested"}:  # type: ignore[attr-defined]
+                bar.update(
+                    f"{base} · scheduled draft · worker still claimed · "
+                    "actions s emergency stop · r refresh"
+                )
+                return
+            actions = ["i edit follow-up draft", "ctrl+g save follow-up draft"]
+            actions.append("d confirm delete" if self.delete_armed else "d delete")
             if getattr(state, "queued_follow_up", None):
-                actions.append("clear queued follow-up")
+                actions.append("clear follow-up draft")
             bar.update(
-                f"{base} · scheduled configuration · scheduler unavailable · "
-                f"actions {' · '.join(actions)}"
+                f"{base} · scheduled draft · scheduler unavailable · actions {' · '.join(actions)}"
             )
             return
         actions: list[str] = []
@@ -2778,6 +2879,13 @@ class LoopDashboard(App[None]):
             self._summary_counts() if states is None else self._summary_counts(states)
         )
         if total == 0:
+            if self._config_mode_value() == "scheduled":
+                return (
+                    "No saved loops yet.\n\n"
+                    "Save Schedule Draft stores metadata only.\n"
+                    "No scheduler or worker will run it.\n\n"
+                    "Tip:\n  q quit · r refresh"
+                )
             return (
                 "No loops yet.\n\n"
                 "Start with:\n"
@@ -3705,73 +3813,128 @@ class LoopDashboard(App[None]):
         self.notify(f"memory deleted: {entry.id}")
         self.refresh_data()
 
+    def _notify_scheduled_runtime_unavailable(self, state: object | None = None) -> None:
+        if state is not None and state.status == "cleanup_failed":  # type: ignore[attr-defined]
+            message = (
+                "Scheduled draft cleanup is unconfirmed; refresh is the only available action."
+            )
+        elif self._is_scheduled_fail_closed(state):
+            message = (
+                "Scheduled draft is still claimed by a worker; only emergency stop and refresh "
+                "are available."
+            )
+        else:
+            message = "Scheduled draft only: saved metadata; no scheduler or worker will run it."
+        self.notify(
+            message,
+            severity="warning",
+        )
+
+    def _attempt_service_mutation(
+        self,
+        operation: Callable[[], object],
+        *,
+        action: str,
+        severity: Literal["information", "warning", "error"] = "error",
+    ) -> tuple[bool, object | None]:
+        try:
+            return True, operation()
+        except RECOVERABLE_SERVICE_ERRORS as exc:
+            self.notify(f"{action} failed: {exc}", severity=severity)
+            self._refresh_after_recoverable_failure()
+            return False, None
+
+    def _refresh_after_recoverable_failure(self) -> None:
+        try:
+            self.refresh_data()
+        except RECOVERABLE_SERVICE_ERRORS:
+            pass
+
+    def _attempt_worker_spawn(self, loop_id: str, *, persisted_action: str) -> bool:
+        try:
+            self._spawn_resume(loop_id)
+        except RECOVERABLE_SERVICE_ERRORS as exc:
+            self.notify(
+                f"{persisted_action} but worker failed to start: {exc}",
+                severity="error",
+            )
+            self._refresh_after_recoverable_failure()
+            return False
+        return True
+
     def action_pause_selected(self) -> None:
-        if self.selected_loop_id:
-            self._clear_delete_confirmation()
-            state = self._selected_state()
-            if not self._can_pause_control(state):
-                self.notify(
-                    (
-                        "scheduled configurations have no pause capability"
-                        if state is not None
-                        and self._state_mode_and_schedule(state)[0] == "scheduled"
-                        else "pause is not available for this loop"
-                    ),
-                    severity="warning",
-                )
-                return
-            try:
-                self.service.request_control(self.selected_loop_id, "pause")
-            except RuntimeError as exc:
-                self.notify(str(exc), severity="error")
-                return
+        state = self._selected_state()
+        if state is None:
+            if self._config_mode_value() == "scheduled":
+                self._notify_scheduled_runtime_unavailable()
+            else:
+                self.notify("pause is not available for this loop", severity="warning")
+            return
+        self._clear_delete_confirmation()
+        if not self._can_pause_control(state):
+            if self._state_mode_and_schedule(state)[0] == "scheduled":
+                self._notify_scheduled_runtime_unavailable(state)
+            else:
+                self.notify("pause is not available for this loop", severity="warning")
+            return
+        succeeded, _result = self._attempt_service_mutation(
+            lambda: self.service.request_control(state.loop_id, "pause"),
+            action="pause request",
+        )
+        if succeeded:
             self.refresh_data()
 
     def action_resume_selected(self) -> None:
-        if self.selected_loop_id:
+        state = self._selected_state()
+        if state is not None:
             self._clear_delete_confirmation()
-            state = self._selected_state()
-            if state is not None:
-                if not self._validate_workspace_root():
-                    return
-                if self._state_mode_and_schedule(state)[0] == "scheduled":
-                    self.notify(
-                        "scheduled configuration saved; automatic scheduling is unavailable",
-                        severity="warning",
-                    )
-                    return
-                try:
-                    self.service.request_resume(self.selected_loop_id)
-                except RuntimeError as exc:
-                    self.notify(str(exc), severity="error")
-                    return
-            self._spawn_resume(self.selected_loop_id)
-            self.notify(f"resume sent: {self.selected_loop_id}")
+            if self._state_mode_and_schedule(state)[0] == "scheduled":
+                self._notify_scheduled_runtime_unavailable(state)
+                return
+            if not self._validate_workspace_root():
+                return
+            succeeded, _result = self._attempt_service_mutation(
+                lambda: self.service.request_resume(state.loop_id),
+                action="resume request",
+            )
+            if not succeeded:
+                return
+            if not self._attempt_worker_spawn(
+                state.loop_id,
+                persisted_action="resume request saved",
+            ):
+                return
+            self.notify(f"resume sent: {state.loop_id}")
             self.refresh_data()
             return
+        if self._config_mode_value() == "scheduled":
+            self._notify_scheduled_runtime_unavailable()
+            return
         if not self._form_supports_run():
-            self.notify(
-                "scheduled mode is visible in the dashboard but not executable yet",
-                severity="warning",
-            )
+            self.notify("current loop configuration cannot run yet", severity="warning")
             return
         self.action_run_loop()
 
     def action_stop_selected(self) -> None:
-        if self.selected_loop_id:
-            self._clear_delete_confirmation()
-            state = self._selected_state()
-            if not self._can_stop_control(state):
-                self.notify(
-                    "stop is not available for this loop",
-                    severity="warning",
-                )
-                return
-            try:
-                self.service.request_control(self.selected_loop_id, "stop")
-            except RuntimeError as exc:
-                self.notify(str(exc), severity="error")
-                return
+        state = self._selected_state()
+        if state is None:
+            if self._config_mode_value() == "scheduled":
+                self._notify_scheduled_runtime_unavailable()
+            else:
+                self.notify("stop is not available for this loop", severity="warning")
+            return
+        self._clear_delete_confirmation()
+        if not self._can_stop_control(state):
+            if self._state_mode_and_schedule(state)[0] == "scheduled":
+                self._notify_scheduled_runtime_unavailable(state)
+            else:
+                self.notify("stop is not available for this loop", severity="warning")
+            return
+        succeeded, _result = self._attempt_service_mutation(
+            lambda: self.service.request_control(state.loop_id, "stop"),
+            action="stop request",
+        )
+        if succeeded:
             self.refresh_data()
 
     def action_save_config(self) -> None:
@@ -3783,31 +3946,55 @@ class LoopDashboard(App[None]):
             self._sync_button_state()
             self._render_selected()
             return
-        if state.status in {"running", "pause_requested", "stop_requested"}:
+        if self._is_scheduled_fail_closed(state):
+            self.notify(
+                (
+                    "Scheduled draft cleanup is unconfirmed; refresh is the only available action."
+                    if state.status == "cleanup_failed"
+                    else "Scheduled draft is still claimed by a worker; only emergency stop and "
+                    "refresh are available."
+                ),
+                severity="warning",
+            )
+            return
+        if state.status in RUNNING_STATUSES:
             self.notify("stop or pause the loop before saving config changes", severity="warning")
             return
-        state.run_config = self._build_run_config_from_form(state)
-        try:
-            state = self.service.update_loop_config(
+        run_config = self._build_run_config_from_form(state)
+        succeeded, result = self._attempt_service_mutation(
+            lambda: self.service.update_loop_config(
                 state.loop_id,
-                state.run_config,
+                run_config,
                 self._dashboard_form_values(),
                 self._workspace_form_values(),
-            )
-        except RuntimeError as exc:
-            self.notify(str(exc), severity="warning")
+            ),
+            action="config save",
+            severity="warning",
+        )
+        if not succeeded or not isinstance(result, LoopState):
             return
-        self.notify(f"config saved: {state.loop_id}")
+        self.notify(f"config saved: {result.loop_id}")
         self.refresh_data()
 
     def action_run_loop(self) -> None:
+        state = self._selected_state()
+        if self._is_scheduled_fail_closed(state):
+            self.notify(
+                (
+                    "Scheduled draft cleanup is unconfirmed; refresh is the only available action."
+                    if state is not None and state.status == "cleanup_failed"
+                    else "Scheduled draft is still claimed by a worker; only emergency stop and "
+                    "refresh are available."
+                ),
+                severity="warning",
+            )
+            return
         if not self._form_supports_run():
             self.notify("current loop configuration cannot run yet", severity="warning")
             return
         if not self._validate_workspace_root():
             return
         mode = self._config_mode_value()
-        state = self._selected_state()
         if state is not None and state.status not in {
             "running",
             "pause_requested",
@@ -3818,18 +4005,20 @@ class LoopDashboard(App[None]):
             dashboard_config = self._dashboard_form_values()
             workspace_config = self._workspace_form_values()
             if mode == "scheduled":
-                try:
-                    self.service.update_loop_config(
+                succeeded, _result = self._attempt_service_mutation(
+                    lambda: self.service.update_loop_config(
                         state.loop_id,
                         run_config,
                         dashboard_config,
                         workspace_config,
-                    )
-                except RuntimeError as exc:
-                    self.notify(str(exc), severity="warning")
+                    ),
+                    action="schedule draft save",
+                    severity="warning",
+                )
+                if not succeeded:
                     return
                 self.notify(
-                    f"scheduled configuration saved: {state.loop_id}; scheduler unavailable"
+                    f"schedule draft saved: {state.loop_id}; no scheduler or worker started"
                 )
                 self.refresh_data()
                 return
@@ -3845,20 +4034,27 @@ class LoopDashboard(App[None]):
             self.refresh_data()
             return
         run_config = self._build_run_config_from_form()
-        created = self.service.create_loop(run_config)
-        created = self.service.update_loop_config(
-            created.loop_id,
-            run_config,
-            self._dashboard_form_values(),
-            self._workspace_form_values(),
+        dashboard_config = self._dashboard_form_values()
+        workspace_config = self._workspace_form_values()
+        succeeded, result = self._attempt_service_mutation(
+            lambda: self.service.create_loop(
+                run_config,
+                dashboard_config=dashboard_config,
+                workspace_config=workspace_config,
+            ),
+            action="loop creation",
         )
+        if not succeeded or not isinstance(result, LoopState):
+            return
+        created = result
         self.selected_loop_id = created.loop_id
         self._config_bound_loop_id = None
         if mode == "scheduled":
-            self.notify(f"scheduled configuration saved: {created.loop_id}; scheduler unavailable")
+            self.notify(f"schedule draft saved: {created.loop_id}; no scheduler or worker started")
             self.refresh_data()
             return
-        self._spawn_resume(created.loop_id)
+        if not self._attempt_worker_spawn(created.loop_id, persisted_action="loop created"):
+            return
         self.notify(f"loop started: {created.loop_id}")
         self.refresh_data()
 
@@ -3903,21 +4099,40 @@ class LoopDashboard(App[None]):
             self.notify("follow-up prompt is empty", severity="warning")
             return
         if not self._can_queue_follow_up(state):
-            self.notify("follow-up queueing is not available for this loop", severity="warning")
+            if self._is_scheduled_fail_closed(state):
+                self.notify(
+                    "Scheduled draft is still claimed by a worker; follow-up metadata cannot be "
+                    "changed.",
+                    severity="warning",
+                )
+            else:
+                self.notify("follow-up saving is not available for this loop", severity="warning")
             return
         run_next = state.status in {"idle", "paused", "stopped", "failed"} and (
             self._state_mode_and_schedule(state)[0] != "scheduled"
         )
         if run_next and not self._validate_workspace_root():
             return
-        state = self.service.queue_follow_up(state.loop_id, follow_up, run_next=run_next)
-        self.query_one("#follow-up-prompt", TextArea).text = ""
+        succeeded, result = self._attempt_service_mutation(
+            lambda: self.service.queue_follow_up(state.loop_id, follow_up, run_next=run_next),
+            action="follow-up save",
+            severity="warning",
+        )
+        if not succeeded or not isinstance(result, LoopState):
+            return
+        state = result
         if state.pending_single_iteration:
-            self._spawn_resume(state.loop_id)
+            if not self._attempt_worker_spawn(
+                state.loop_id,
+                persisted_action="follow-up queued",
+            ):
+                return
+            self.query_one("#follow-up-prompt", TextArea).text = ""
             self.notify(f"follow-up queued and next iteration started: {state.loop_id}")
         else:
+            self.query_one("#follow-up-prompt", TextArea).text = ""
             self.notify(
-                f"follow-up queued for a future runner: {state.loop_id}"
+                f"follow-up metadata saved: {state.loop_id}; no scheduler or worker will run it"
                 if self._state_mode_and_schedule(state)[0] == "scheduled"
                 else f"follow-up queued: {state.loop_id}"
             )
@@ -3934,10 +4149,24 @@ class LoopDashboard(App[None]):
         if state is None or not state.queued_follow_up:
             self.notify("no queued follow-up to clear", severity="warning")
             return
-        if state.pending_single_iteration or self.service.store.is_locked(state.loop_id):
-            self.notify("follow-up is already committed to the next iteration", severity="warning")
+        if not self._can_clear_follow_up(state):
+            self.notify(
+                (
+                    "Scheduled draft is still claimed by a worker; follow-up metadata cannot be "
+                    "changed."
+                    if self._is_scheduled_fail_closed(state)
+                    else "follow-up is already committed to the next iteration"
+                ),
+                severity="warning",
+            )
             return
-        self.service.clear_follow_up(state.loop_id)
+        succeeded, _result = self._attempt_service_mutation(
+            lambda: self.service.clear_follow_up(state.loop_id),
+            action="follow-up clear",
+            severity="warning",
+        )
+        if not succeeded:
+            return
         self.notify(f"queued follow-up cleared: {state.loop_id}")
         self.refresh_data()
 
@@ -3946,26 +4175,41 @@ class LoopDashboard(App[None]):
             return
         state = self._selected_state()
         if state is None:
-            self.notify("select a loop before queueing the next iteration", severity="warning")
+            if self._config_mode_value() == "scheduled":
+                self._notify_scheduled_runtime_unavailable()
+            else:
+                self.notify("select a loop before queueing the next iteration", severity="warning")
             return
         if not self._can_next_iteration(state):
-            self.notify("next iteration is not available right now", severity="warning")
+            if self._state_mode_and_schedule(state)[0] == "scheduled":
+                self._notify_scheduled_runtime_unavailable(state)
+            else:
+                self.notify("next iteration is not available right now", severity="warning")
             return
         if not self._validate_workspace_root():
             return
-        self.service.request_single_iteration(state.loop_id)  # type: ignore[attr-defined]
-        self._spawn_resume(state.loop_id)  # type: ignore[attr-defined]
-        self.notify(f"next iteration queued: {state.loop_id}")  # type: ignore[attr-defined]
+        succeeded, _result = self._attempt_service_mutation(
+            lambda: self.service.request_single_iteration(state.loop_id),
+            action="next iteration request",
+        )
+        if not succeeded:
+            return
+        if not self._attempt_worker_spawn(
+            state.loop_id,
+            persisted_action="next iteration queued",
+        ):
+            return
+        self.notify(f"next iteration queued: {state.loop_id}")
         self.refresh_data()
 
     def action_restart_selected(self) -> None:
         state = self._selected_state()
         if state is None:
             return
-        if not self._validate_workspace_root():
-            return
         if self._state_mode_and_schedule(state)[0] == "scheduled":
-            self.notify("scheduled loops cannot be restarted manually", severity="warning")
+            self._notify_scheduled_runtime_unavailable(state)
+            return
+        if not self._validate_workspace_root():
             return
         state = self._request_restart_and_spawn(
             state,
@@ -3982,10 +4226,10 @@ class LoopDashboard(App[None]):
         state = self._selected_state()
         if state is None:
             return
-        if not self._validate_workspace_root():
-            return
         if self._state_mode_and_schedule(state)[0] == "scheduled":
-            self.notify("scheduled loops cannot be restarted manually", severity="warning")
+            self._notify_scheduled_runtime_unavailable(state)
+            return
+        if not self._validate_workspace_root():
             return
         state = self._request_restart_and_spawn(
             state,
@@ -4008,40 +4252,54 @@ class LoopDashboard(App[None]):
         *,
         reset: bool = False,
     ) -> LoopState | None:
-        try:
-            restarted = self.service.request_restart(
+        succeeded, result = self._attempt_service_mutation(
+            lambda: self.service.request_restart(
                 state.loop_id,
                 run_config,
                 dashboard_config,
                 workspace_config,
                 reset=reset,
-            )
-        except RuntimeError as exc:
-            self.notify(str(exc), severity="warning")
+            ),
+            action="restart request",
+            severity="warning",
+        )
+        if not succeeded or not isinstance(result, LoopState):
             return None
-        try:
-            self._spawn_resume(restarted.loop_id)
-        except OSError as exc:
-            self.notify(
-                f"configuration saved but worker failed to start: {exc}",
-                severity="error",
-            )
+        restarted = result
+        if not self._attempt_worker_spawn(
+            restarted.loop_id,
+            persisted_action="configuration saved",
+        ):
             return None
         return restarted
 
     def action_remove_selected(self) -> None:
         if self.selected_loop_id:
             selected_loop_id = self.selected_loop_id
+            state = self._selected_state()
+            if self._is_scheduled_fail_closed(state):
+                self.notify(
+                    (
+                        "Scheduled draft cleanup is unconfirmed; refresh is the only available "
+                        "action."
+                        if state is not None and state.status == "cleanup_failed"
+                        else "Scheduled draft is still claimed by a worker; only emergency stop "
+                        "and refresh are available."
+                    ),
+                    severity="warning",
+                )
+                return
             if not self.delete_armed or self._delete_armed_loop_id != selected_loop_id:
                 self.delete_armed = True
                 self._delete_armed_loop_id = selected_loop_id
                 self.notify(f"press d again to delete: {selected_loop_id}")
                 self._sync_button_state()
                 return
-            try:
-                self.service.remove_loop(selected_loop_id, force=True)
-            except Exception as exc:
-                self.notify(str(exc), severity="error")
+            succeeded, _result = self._attempt_service_mutation(
+                lambda: self.service.remove_loop(selected_loop_id, force=True),
+                action="loop removal",
+            )
+            if not succeeded:
                 return
             self.notify(f"removed: {selected_loop_id}")
             self._clear_delete_confirmation()

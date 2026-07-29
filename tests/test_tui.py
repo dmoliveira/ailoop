@@ -6,12 +6,13 @@ from unittest.mock import patch
 
 import pytest
 from textual.binding import Binding
-from textual.widgets import DataTable, Input, TextArea
+from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig, LoopState
 from ailoop.service import LoopService
 from ailoop.tui import (
+    PLANNING_ONLY_CONTROL_IDS,
     LoopDashboard,
     launch_in_tmux,
     loop_matches_query,
@@ -872,7 +873,7 @@ def test_summary_selected_text_compacts_mode_and_next_run() -> None:
     assert "paused" in text
     assert "iter 2/5" in text
     assert "sched" in text
-    assert "scheduler unavailable" in text
+    assert "draft/no worker" in text
 
 
 def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults() -> None:
@@ -899,7 +900,7 @@ def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults
 
     text = app._summary_selected_text(FakeState(), width=140)
 
-    assert "scheduler unavailable" in text
+    assert "draft/no worker" in text
     assert "next" not in text
 
 
@@ -937,7 +938,8 @@ def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
     text = app._loop_summary_text(FakeState())
 
     assert "Mode: Scheduled" in text
-    assert "Schedule: saved · scheduler unavailable" in text
+    assert "Schedule: saved draft metadata only · no scheduler or worker" in text
+    assert "Plan only (not enforced): current branch · Level 3 Edit" in text
     assert "Next:" not in text
 
 
@@ -2545,9 +2547,9 @@ def test_workspace_scope_text_uses_editable_workspace_fields() -> None:
     text = app._workspace_scope_text(None)
 
     assert "root: /tmp/workspace" in text
-    assert "include: 2 patterns" in text
-    assert "exclude: 3 patterns" in text
-    assert "strategy: branch per iteration" in text
+    assert "include plan (not enforced): 2 patterns" in text
+    assert "exclude plan (not enforced): 3 patterns" in text
+    assert "strategy plan (not enforced): branch per iteration" in text
     assert "schedule: every 45 minutes" in text
     assert "quiet-hours: on" in text
 
@@ -2677,7 +2679,7 @@ def test_schedule_card_text_prefers_selected_loop_schedule_over_form_defaults() 
     assert "every 6" in text
     assert "start 09:30" in text
     assert "tz UTC" in text
-    assert "saved · scheduler unavailable" in text
+    assert "saved draft metadata · no scheduler or worker" in text
     assert "every 1" not in text
 
 
@@ -2781,7 +2783,7 @@ def test_actions_status_text_blocks_continue_for_scheduled_idle_loop(tmp_path: P
 
     text = app._actions_status_text(state)
 
-    assert text.startswith("scheduled-id · saved configuration")
+    assert text.startswith("scheduled-id · saved draft configuration")
     assert "scheduler unavailable" in text
     assert "continue ready" not in text
 
@@ -2904,7 +2906,9 @@ def test_action_resume_selected_blocks_scheduled_loop(tmp_path: Path) -> None:
 
     updated = service.load_loop(state.loop_id)
     assert updated.control == "run"
-    assert seen == {"message": "scheduled configuration saved; automatic scheduling is unavailable"}
+    assert seen == {
+        "message": "Scheduled draft only: saved metadata; no scheduler or worker will run it."
+    }
 
 
 def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -> None:
@@ -2949,7 +2953,7 @@ def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -
     assert len(loops) == 1
     assert loops[0].dashboard_config["mode"] == "scheduled"
     assert created == {
-        "message": (f"scheduled configuration saved: {loops[0].loop_id}; scheduler unavailable"),
+        "message": (f"schedule draft saved: {loops[0].loop_id}; no scheduler or worker started"),
         "refreshed": "yes",
     }
     assert "spawned" not in created
@@ -3075,7 +3079,9 @@ def test_action_save_schedule_warns_when_manual_iteration_is_pending(tmp_path: P
     app.action_run_loop()
 
     assert spawned == []
-    assert messages == ["Cannot save scheduled mode while a manual iteration is pending"]
+    assert messages == [
+        "schedule draft save failed: Cannot save scheduled mode while a manual iteration is pending"
+    ]
     assert service.load_loop(state.loop_id).pending_single_iteration is True
 
 
@@ -3119,9 +3125,8 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
 
     assert "Mode: Scheduled" in text
     assert "Mode: Scheduled · every 6 hours" in text
-    assert (
-        "Schedule: saved · scheduler unavailable · branch per iteration · Level 4 Edit + Commit"
-    ) in text
+    assert "Schedule: saved draft metadata only · no scheduler or worker" in text
+    assert "Plan only (not enforced): branch per iteration · Level 4 Edit + Commit" in text
     assert "Scope: /tmp/scheduled-workspace · branch" in text
 
 
@@ -3351,7 +3356,7 @@ def test_safety_card_text_compacts_preview_summary() -> None:
 
     text = app._safety_card_text(None)
 
-    assert text.startswith("Safety: Level 4 Edit + Commit")
+    assert text.startswith("Safety plan (saved metadata; not enforced): Level 4 Edit + Commit")
     assert "limits 4h/100/10" in text
     assert "Autonomy level:" not in text
 
@@ -3377,7 +3382,7 @@ def test_notifications_text_compacts_preview_summary() -> None:
 
     text = app._notifications_text()
 
-    assert text.startswith("Notify: start on")
+    assert text.startswith("Notification plan (saved metadata; no notifications sent): start on")
     assert "chan T on/S off/E off" in text
     assert "Channels:" not in text
 
@@ -3432,9 +3437,9 @@ def test_ops_snapshot_text_compacts_to_two_summary_lines() -> None:
     assert lines[0] == "[b][#4ea3ff]OPS SNAPSHOT[/][/]"
     assert len(lines) == 3
     assert "Sched 30m" in lines[1]
-    assert "Safe L3 current" in lines[1]
+    assert "Plan only, not enforced: L3 current" in lines[1]
     assert "C/P on/on" in lines[2]
-    assert "ch on/off/off" in lines[2]
+    assert "channels on/off/off" in lines[2]
 
 
 def test_ops_snapshot_does_not_claim_countdown_for_scheduled_config() -> None:
@@ -3470,7 +3475,7 @@ def test_ops_snapshot_does_not_claim_countdown_for_scheduled_config() -> None:
 
     text = app._ops_snapshot_text(FakeState())
 
-    assert "Sched saved · scheduler unavailable" in text
+    assert "Sched saved draft · no scheduler or worker" in text
     assert "next" not in text.lower()
 
 
@@ -3506,7 +3511,8 @@ def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
 
     assert "Loop: summary-loop ·" in text
     assert "Mode: Fixed Count · every 1 minute" in text
-    assert "Next: in 30 minutes · current branch · Level 3 Edit" in text
+    assert "Next: in 30 minutes" in text
+    assert "Plan only (not enforced): current branch · Level 3 Edit" in text
     assert "Scope: /tmp/summary-workspace · branch" in text
     assert "Runner/Agent: echo · orchestrator" in text
     assert "Updated/Avg:" in text
@@ -3846,8 +3852,8 @@ def test_scheduled_tui_disables_manual_execution_and_labels_saved_actions(
                 "#next-iteration",
             ):
                 assert app.query_one(selector).disabled is True
-            assert str(app.query_one("#run-loop").label) == "Save Schedule"
-            assert str(app.query_one("#queue-follow-up").label) == ("Queue Follow-up (saved only)")
+            assert str(app.query_one("#run-loop").label) == "Save Schedule Draft"
+            assert str(app.query_one("#queue-follow-up").label) == "Save Follow-up Draft"
             before = service.load_loop(state.loop_id).to_dict()
             app.action_pause_selected()
             app.action_stop_selected()
@@ -3856,6 +3862,440 @@ def test_scheduled_tui_disables_manual_execution_and_labels_saved_actions(
             assert "scheduler unavailable" in help_text
             assert "continue" not in help_text
             assert "next iteration" not in help_text
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_new_scheduled_draft_is_honest_and_non_executable_at_80x24(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    messages: list[str] = []
+    spawned: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+        app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+        async with app.run_test(size=(80, 24)) as pilot:
+            app.query_one("#config-mode", Select).value = "scheduled"
+            await pilot.pause()
+
+            summary_bar = app.query_one("#summary_bar", Static)
+            help_bar = app.query_one("#help_bar", Static)
+            assert summary_bar.region.height > 0
+            assert help_bar.region.height > 0
+            assert "sched draft · no worker" in str(summary_bar.render())
+            assert "no scheduler or worker will run it" in str(help_bar.render())
+            assert (
+                "no scheduler or worker will run it"
+                in str(app.query_one("#loop_summary", Static).render()).lower()
+            )
+            assert app.query_one("#start-continue", Button).disabled is True
+            assert str(app.query_one("#start-continue", Button).label) == "▶ Runtime Unavailable"
+            assert app.query_one("#run-loop", Button).disabled is False
+            assert str(app.query_one("#run-loop", Button).label) == "Save Schedule Draft"
+            focus_ids = {widget.id for widget in app.screen.focus_chain}
+            assert "start-continue" not in focus_ids
+            assert "run-loop" in focus_ids
+
+            app.query_one("#new-loop", Button).focus()
+            await pilot.press("p", "u", "s", "shift+n")
+            await pilot.pause()
+
+            assert (
+                messages
+                == ["Scheduled draft only: saved metadata; no scheduler or worker will run it."] * 4
+            )
+            assert service.list_loops() == []
+            assert spawned == []
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_planning_controls_are_read_only_and_metadata_survives_save(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = LoopService(tmp_path / "state")
+    dashboard_config: dict[str, object] = {
+        "mode": "fixed",
+        "autonomy": "level-5",
+        "branch_strategy": "per-iteration",
+        "ask_before_commit": False,
+        "ask_before_push": False,
+        "auto_commit": True,
+        "auto_push": True,
+        "create_backup_branch": False,
+        "auto_stop_on_limit": False,
+        "max_runtime": "9h",
+        "max_files_changed": "7",
+        "max_commits": "2",
+        "max_token_usage": "5000",
+        "max_cost": "12",
+        "notify_start": False,
+        "notify_success": False,
+        "notify_failure": False,
+        "notify_limit": False,
+        "notify_complete": False,
+        "notify_terminal": False,
+        "notify_slack": True,
+        "notify_email": True,
+    }
+    state = service.create_loop(
+        make_loop_config(workspace_root=str(workspace)),
+        loop_id="planning-read-only",
+        dashboard_config=dashboard_config,
+        workspace_config={"include": "app/**", "exclude": "vendor/**"},
+    )
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test(size=(140, 45)) as pilot:
+            app.refresh_data()
+            await pilot.pause()
+
+            focus_ids = {widget.id for widget in app.screen.focus_chain}
+            for control_id in PLANNING_ONLY_CONTROL_IDS:
+                assert app.query_one(f"#{control_id}").disabled is True
+                assert control_id not in focus_ids
+
+            assert "not enforced" in str(app.query_one("#safety-preview", Static).render())
+            assert "no notifications sent" in str(
+                app.query_one("#notifications-preview", Static).render()
+            )
+            assert "Plan only, not enforced" in str(app.query_one("#ops_snapshot", Static).render())
+            assert "Plan only (not enforced)" in str(
+                app.query_one("#loop_summary", Static).render()
+            )
+            assert "strategy plan (not enforced)" in str(
+                app.query_one("#workspace_scope", Static).render()
+            )
+
+            app.query_one("#config-prompt", TextArea).text = "updated prompt only"
+            app.action_save_config()
+            await pilot.pause()
+
+            saved = service.load_loop(state.loop_id)
+            assert saved.run_config.prompt == "updated prompt only"
+            for key, value in dashboard_config.items():
+                assert saved.dashboard_config[key] == value
+            assert saved.workspace_config["include"] == "app/**"
+            assert saved.workspace_config["exclude"] == "vendor/**"
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize(
+    ("status", "stop_enabled"),
+    [
+        ("running", True),
+        ("pause_requested", True),
+        ("stop_requested", True),
+        ("cleanup_failed", False),
+    ],
+)
+def test_scheduled_fail_closed_states_expose_only_safe_controls(
+    tmp_path: Path,
+    status: str,
+    stop_enabled: bool,
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(
+        make_loop_config(workspace_root=str(workspace)),
+        loop_id=f"scheduled-{status.replace('_', '-')}",
+        dashboard_config={"mode": "scheduled"},
+    )
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.status = status
+        persisted.queued_follow_up = "saved follow-up draft"
+        persisted.queued_follow_up_token = "draft-token"
+
+    spawned: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+        async with app.run_test(size=(140, 45)) as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            app.query_one("#follow-up-prompt", TextArea).text = "preserve unsaved follow-up"
+            await pilot.pause()
+
+            for selector in (
+                "#pause",
+                "#start-continue",
+                "#restart",
+                "#restart-reset",
+                "#next-iteration",
+                "#queue-follow-up",
+                "#clear-follow-up",
+                "#save-config",
+                "#run-loop",
+            ):
+                assert app.query_one(selector, Button).disabled is True
+            assert app.query_one("#stop", Button).disabled is (not stop_enabled)
+            help_text = str(app.query_one("#help_bar", Static).render())
+            if status == "cleanup_failed":
+                assert "refresh only" in help_text
+                assert "emergency stop" not in help_text
+            else:
+                assert "s emergency stop" in help_text
+                assert "r refresh" in help_text
+
+            before = service.load_loop(state.loop_id).to_dict()
+            app.action_pause_selected()
+            app.action_resume_selected()
+            app.action_run_loop()
+            app.action_queue_follow_up()
+            app.action_clear_follow_up()
+            app.action_next_iteration()
+            app.action_restart_selected()
+            app.action_restart_reset_selected()
+            app.action_save_config()
+            app.action_remove_selected()
+            assert service.load_loop(state.loop_id).to_dict() == before
+            assert app.query_one("#follow-up-prompt", TextArea).text == (
+                "preserve unsaved follow-up"
+            )
+            assert app.delete_armed is False
+            assert spawned == []
+
+            app.action_stop_selected()
+            after_stop = service.load_loop(state.loop_id)
+            if stop_enabled:
+                assert after_stop.status == "stop_requested"
+                assert after_stop.control == "stop"
+            else:
+                assert after_stop.to_dict() == before
+            assert spawned == []
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_scheduled_follow_up_saves_metadata_without_starting_worker(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(
+        make_loop_config(),
+        loop_id="scheduled-follow-up-draft",
+        dashboard_config={"mode": "scheduled"},
+    )
+    spawned: list[str] = []
+    messages: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            follow_up = app.query_one("#follow-up-prompt", TextArea)
+            follow_up.text = "save this planning note"
+            await pilot.pause()
+            assert str(app.query_one("#queue-follow-up", Button).label) == "Save Follow-up Draft"
+
+            app.action_queue_follow_up()
+            await pilot.pause()
+
+            saved = service.load_loop(state.loop_id)
+            assert saved.queued_follow_up == "save this planning note"
+            assert saved.pending_single_iteration is False
+            assert follow_up.text == ""
+            assert spawned == []
+            assert messages == [
+                f"follow-up metadata saved: {state.loop_id}; no scheduler or worker will run it"
+            ]
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError, ValueError])
+def test_service_mutation_recovery_handles_expected_errors(error_type: type[Exception]) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    messages: list[tuple[str, str]] = []
+    refreshed: list[bool] = []
+    app.notify = lambda message, severity="information", **_kwargs: messages.append(  # type: ignore[method-assign]
+        (message, severity)
+    )
+    app.refresh_data = lambda: refreshed.append(True)  # type: ignore[method-assign]
+
+    def fail() -> None:
+        raise error_type("stale state")
+
+    succeeded, result = app._attempt_service_mutation(fail, action="test mutation")
+
+    assert succeeded is False
+    assert result is None
+    assert messages == [("test mutation failed: stale state", "error")]
+    assert refreshed == [True]
+
+
+def test_failed_follow_up_mutation_preserves_input_and_does_not_spawn(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_loop_config(), loop_id="failed-follow-up")
+    spawned: list[str] = []
+    messages: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            follow_up = app.query_one("#follow-up-prompt", TextArea)
+            follow_up.text = "preserve this text"
+            await pilot.pause()
+
+            def fail_queue(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                raise RuntimeError("loop disappeared")
+
+            monkeypatch.setattr(service, "queue_follow_up", fail_queue)
+            app.action_queue_follow_up()
+            await pilot.pause()
+
+            assert follow_up.text == "preserve this text"
+            assert service.load_loop(state.loop_id).queued_follow_up is None
+            assert spawned == []
+            assert messages == ["follow-up save failed: loop disappeared"]
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_failed_new_schedule_creation_preserves_draft_and_selection(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    spawned: list[str] = []
+    messages: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.query_one("#config-mode", Select).value = "scheduled"
+            prompt = app.query_one("#config-prompt", TextArea)
+            prompt.text = "preserve schedule draft"
+            await pilot.pause()
+
+            def fail_create(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+                raise OSError("disk unavailable")
+
+            monkeypatch.setattr(service, "create_loop", fail_create)
+            app.action_run_loop()
+            await pilot.pause()
+
+            assert prompt.text == "preserve schedule draft"
+            assert app.selected_loop_id is None
+            assert service.list_loops() == []
+            assert spawned == []
+            assert messages == ["loop creation failed: disk unavailable"]
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize(
+    ("action_name", "expected_message"),
+    [
+        ("resume", "resume request saved but worker failed to start: spawn unavailable"),
+        ("new", "loop created but worker failed to start: spawn unavailable"),
+        ("next", "next iteration queued but worker failed to start: spawn unavailable"),
+        ("follow-up", "follow-up queued but worker failed to start: spawn unavailable"),
+    ],
+)
+def test_worker_spawn_failures_recover_after_persisted_actions(
+    tmp_path: Path,
+    action_name: str,
+    expected_message: str,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state: LoopState | None = None
+    if action_name != "new":
+        state = service.create_loop(make_loop_config(), loop_id=f"spawn-failure-{action_name}")
+        with service.store.mutate(state.loop_id) as persisted:
+            persisted.status = "paused"
+            persisted.control = "pause"
+    messages: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id if state is not None else None,
+        )
+        app.service = service
+        app.filter_mode = "all"
+        app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+
+        def fail_spawn(_loop_id: str) -> None:
+            raise OSError("spawn unavailable")
+
+        app._spawn_resume = fail_spawn  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            app.query_one("#new-loop", Button).focus()
+            follow_up = app.query_one("#follow-up-prompt", TextArea)
+            if action_name == "resume":
+                app.action_resume_selected()
+            elif action_name == "new":
+                app.action_run_loop()
+            elif action_name == "next":
+                app.action_next_iteration()
+            else:
+                follow_up.text = "preserve after failed spawn"
+                await pilot.pause()
+                app.action_queue_follow_up()
+            await pilot.pause()
+
+            assert messages == [expected_message]
+            loops = service.list_loops()
+            assert len(loops) == 1
+            saved = loops[0]
+            if action_name in {"next", "follow-up"}:
+                assert saved.pending_single_iteration is True
+            else:
+                assert saved.status == "idle"
+                assert saved.control == "run"
+            if action_name == "follow-up":
+                assert saved.queued_follow_up == "preserve after failed spawn"
+                assert follow_up.text == "preserve after failed spawn"
 
     import asyncio
 
@@ -3901,7 +4341,7 @@ def test_scheduled_claimed_help_shows_emergency_stop_and_delete_confirmation(
     app._render_help_bar(state)
     assert "s emergency stop" in bar.text
     assert "d delete" not in bar.text
-    assert "emergency stop ready" in app._actions_status_text(state)
+    assert "emergency stop available" in app._actions_status_text(state)
 
     state.status = "stopped"
     app._render_help_bar(state)

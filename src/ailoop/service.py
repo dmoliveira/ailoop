@@ -56,7 +56,14 @@ class LoopService:
     def _is_scheduled(state: LoopState) -> bool:
         return state.dashboard_config.get("mode") == "scheduled"
 
-    def create_loop(self, run_config: LoopRunConfig, loop_id: str | None = None) -> LoopState:
+    def create_loop(
+        self,
+        run_config: LoopRunConfig,
+        loop_id: str | None = None,
+        *,
+        dashboard_config: dict[str, Any] | None = None,
+        workspace_config: dict[str, str] | None = None,
+    ) -> LoopState:
         run_config.workspace_root = self._normalize_workspace_root(run_config.workspace_root)
         resolved_loop_id = validate_loop_id(loop_id or uuid.uuid4().hex[:12])
         state = LoopState(
@@ -66,31 +73,61 @@ class LoopService:
             status="idle",
             control="run",
             run_config=run_config,
+            dashboard_config=dict(dashboard_config or {}),
+            workspace_config=dict(workspace_config or {}),
         )
+        record_workspace_prompt = self._prepare_workspace_prompt_if_changed(state)
+        created = False
         with self.store.acquire_lock(resolved_loop_id):
-            self.store.create_if_absent(state)
-            self.store.append_event(state.loop_id, {"at": utc_now(), "event": "created"})
-            with self.store.mutate(state.loop_id) as created:
-                self._record_workspace_prompt_if_changed(created)
-                state = created
+            try:
+                self.store.create_if_absent(state)
+                created = True
+                if not self.store.append_event(
+                    state.loop_id,
+                    {"at": utc_now(), "event": "created"},
+                ):
+                    raise RuntimeError(f"Failed to record creation event: {state.loop_id}")
+                if record_workspace_prompt:
+                    self.workspace_history.append_prompt(state.loop_id, state.run_config)
+            except BaseException as creation_error:
+                if created:
+                    try:
+                        self._rollback_created_loop(state.loop_id)
+                    except BaseException as rollback_error:
+                        raise RuntimeError(
+                            f"Loop creation failed for {state.loop_id}: {creation_error}; "
+                            f"rollback failed: {rollback_error}"
+                        ) from creation_error
+                raise
         return state
 
-    def _record_workspace_prompt_if_changed(self, state: LoopState) -> None:
+    def _rollback_created_loop(self, loop_id: str) -> None:
+        """Discard only a loop created by the current, execution-locked operation."""
+        with self.store.acquire_mutation_lock(loop_id):
+            directory = raw_loop_dir(self.state_root, loop_id)
+            if directory.exists():
+                shutil.rmtree(directory)
+
+    def _prepare_workspace_prompt_if_changed(self, state: LoopState) -> bool:
         signature = workspace_prompt_signature(
             state.run_config.workspace_root,
             state.run_config.prompt,
         )
         if not state.run_config.workspace_history_enabled or signature is None:
-            return
+            return False
         if signature == state.workspace_prompt_signature:
-            return
+            return False
         if state.workspace_prompt_signature is None:
             latest_prompt = self.workspace_history.latest_prompt(state.run_config.workspace_root)
             if latest_prompt == state.run_config.prompt.strip():
                 state.workspace_prompt_signature = signature
-                return
-        self.workspace_history.append_prompt(state.loop_id, state.run_config)
+                return False
         state.workspace_prompt_signature = signature
+        return True
+
+    def _record_workspace_prompt_if_changed(self, state: LoopState) -> None:
+        if self._prepare_workspace_prompt_if_changed(state):
+            self.workspace_history.append_prompt(state.loop_id, state.run_config)
 
     def load_loop(self, loop_id: str) -> LoopState:
         return self.store.load(loop_id)
@@ -200,6 +237,10 @@ class LoopService:
             with self.store.mutate(loop_id) as state:
                 if state.pending_single_iteration:
                     raise RuntimeError(f"Loop already has a pending iteration: {loop_id}")
+                if self._is_scheduled(state) and state.status in FAIL_CLOSED_STATUSES:
+                    raise RuntimeError(
+                        "Cannot change scheduled follow-up metadata while a worker is active"
+                    )
                 if run_next:
                     if self._is_scheduled(state):
                         raise RuntimeError(

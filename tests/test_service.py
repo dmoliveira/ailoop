@@ -3,10 +3,116 @@ from pathlib import Path
 import pytest
 
 from ailoop.models import LoopRunConfig
-from ailoop.paths import lock_file
+from ailoop.paths import lock_file, raw_loop_dir
 from ailoop.runners.local import CAPTURE_TAIL_LINES, LocalRunner
 from ailoop.service import LoopService
 from ailoop.stats import render_iteration_summary, render_stats, render_status
+
+
+def make_service_run_config(*, workspace_root: str | None = None) -> LoopRunConfig:
+    return LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=2,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+        workspace_root=workspace_root,
+    )
+
+
+def test_create_loop_persists_complete_config_in_initial_state(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+
+    state = service.create_loop(
+        make_service_run_config(),
+        "configured-positional",
+        dashboard_config={"mode": "scheduled", "autonomy": "level-4"},
+        workspace_config={"include": "src/**", "exclude": ".git/**"},
+    )
+
+    loaded = service.load_loop(state.loop_id)
+    assert loaded.dashboard_config == {"mode": "scheduled", "autonomy": "level-4"}
+    assert loaded.workspace_config == {"include": "src/**", "exclude": ".git/**"}
+
+
+@pytest.mark.parametrize(
+    "failure_point",
+    ["state_write", "event_exception", "event_false", "workspace_history"],
+)
+def test_create_loop_rolls_back_all_recoverable_creation_failures(
+    tmp_path: Path,
+    monkeypatch,
+    failure_point: str,
+) -> None:
+    state_root = tmp_path / "state"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    service = LoopService(state_root)
+    run_config = make_service_run_config(
+        workspace_root=str(workspace) if failure_point == "workspace_history" else None
+    )
+
+    if failure_point == "state_write":
+        monkeypatch.setattr(
+            service.store,
+            "_write_unlocked",
+            lambda _state: (_ for _ in ()).throw(OSError("state write failed")),
+        )
+    elif failure_point == "event_exception":
+        monkeypatch.setattr(
+            service.store,
+            "append_event",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("event write failed")),
+        )
+    elif failure_point == "event_false":
+        monkeypatch.setattr(service.store, "append_event", lambda *_args, **_kwargs: False)
+    else:
+        monkeypatch.setattr(
+            service.workspace_history,
+            "append_prompt",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("history write failed")),
+        )
+
+    with pytest.raises((OSError, RuntimeError)):
+        service.create_loop(
+            run_config,
+            "creation-rollback",
+            dashboard_config={"mode": "scheduled"},
+            workspace_config={"include": "src/**"},
+        )
+
+    assert not raw_loop_dir(state_root, "creation-rollback").exists()
+    assert service.list_loops() == []
+    with pytest.raises(FileNotFoundError):
+        service.load_loop("creation-rollback")
+
+
+def test_create_loop_reports_creation_and_rollback_failures(tmp_path: Path, monkeypatch) -> None:
+    service = LoopService(tmp_path)
+    monkeypatch.setattr(
+        service.store,
+        "append_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("event write failed")),
+    )
+    monkeypatch.setattr(
+        "ailoop.service.shutil.rmtree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("cleanup failed")),
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        service.create_loop(make_service_run_config(), "rollback-report")
+
+    message = str(raised.value)
+    assert "event write failed" in message
+    assert "rollback failed: cleanup failed" in message
 
 
 def test_loop_runs_and_persists_state(tmp_path: Path) -> None:
@@ -361,6 +467,34 @@ def test_scheduled_loop_allows_emergency_stop_for_claimed_process(tmp_path: Path
 
     assert stopped.status == "stop_requested"
     assert stopped.control == "stop"
+
+    retried = service.request_control(state.loop_id, "stop")
+    assert retried.status == "stop_requested"
+    assert retried.control == "stop"
+
+
+@pytest.mark.parametrize(
+    "status",
+    ["running", "pause_requested", "stop_requested", "cleanup_failed"],
+)
+def test_scheduled_loop_rejects_follow_up_changes_while_fail_closed(
+    tmp_path: Path,
+    status: str,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(
+        make_service_run_config(),
+        loop_id=f"scheduled-follow-up-{status.replace('_', '-')}",
+        dashboard_config={"mode": "scheduled"},
+    )
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.status = status
+
+    before = service.load_loop(state.loop_id).to_dict()
+    with pytest.raises(RuntimeError, match="while a worker is active"):
+        service.queue_follow_up(state.loop_id, "review this")
+
+    assert service.load_loop(state.loop_id).to_dict() == before
 
 
 def test_saving_scheduled_mode_normalizes_control_and_rejects_pending_work(
