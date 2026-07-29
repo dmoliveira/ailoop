@@ -959,6 +959,12 @@ def main() -> None:
         else:
             print(f"Error: {exc}")
         raise SystemExit(1) from exc
+    except OSError as exc:
+        if args.json:
+            print_json({"ok": False, "error": str(exc)})
+        else:
+            print(f"Storage error: {exc}")
+        raise SystemExit(1) from exc
     finally:
         set_color_mode(previous_color_mode)
 

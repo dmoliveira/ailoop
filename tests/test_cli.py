@@ -976,18 +976,41 @@ def test_memory_list_empty_output_includes_scope_guidance(
     assert 'ailoop memory save "Quick review" "Review the repo"' in out
 
 
-def test_memory_show_missing_entry_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("entry_id", ["missing-entry", "../escape"])
+def test_memory_show_missing_entry_is_friendly(
+    entry_id: str, capsys, monkeypatch, tmp_path: Path
+) -> None:
     config_path = write_test_config(tmp_path)
     monkeypatch.setattr(
         "sys.argv",
-        ["ailoop", "--config", str(config_path), "memory", "show", "missing-entry"],
+        ["ailoop", "--config", str(config_path), "memory", "show", entry_id],
     )
     with pytest.raises(SystemExit) as exc:
         main()
     assert exc.value.code == 1
     out = capsys.readouterr().out
-    assert "Memory entry not found: missing-entry" in out
+    assert f"Memory entry not found: {entry_id}" in out
     assert "ailoop memory list --all-folders" in out
+
+
+def test_memory_storage_error_is_reported_without_traceback(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setattr(
+        "ailoop.memory.MemoryStore.load",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("unsafe storage")),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "show", "a" * 12],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 1
+    assert capsys.readouterr().out == "Storage error: unsafe storage\n"
 
 
 def test_status_missing_loop_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:
