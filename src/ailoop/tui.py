@@ -839,7 +839,10 @@ class LoopDashboard(App[None]):
         self._draft_loop_selected = False
         self._selection_initialized = False
         self._visible_loop_ids: set[str] = set()
+        self._rebuilding_loop_table = False
         self._delete_armed_loop_id: str | None = None
+        self._memory_archive_armed_entry_id: str | None = None
+        self._memory_delete_armed_entry_id: str | None = None
         try:
             self.launch_cwd = Path(os.getcwd())
         except FileNotFoundError:
@@ -2693,6 +2696,12 @@ class LoopDashboard(App[None]):
         can_restart_reset = state is not None and not scheduled and status not in RUNNING_STATUSES
         can_next_iteration = self._can_next_iteration(state)
         memory_entry = self._primary_memory_entry()
+        current_memory_id = memory_entry.id if memory_entry is not None else None
+        if self._memory_archive_armed_entry_id not in {
+            None,
+            current_memory_id,
+        } or self._memory_delete_armed_entry_id not in {None, current_memory_id}:
+            self._clear_memory_confirmations()
         for button_id, active in {
             "filter-running": self.filter_mode == "running",
             "filter-active": self.filter_mode == "active",
@@ -3166,6 +3175,29 @@ class LoopDashboard(App[None]):
         self.delete_armed = False
         self._delete_armed_loop_id = None
 
+    def _clear_memory_confirmations(self) -> None:
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
+        self._memory_archive_armed_entry_id = None
+        self._memory_delete_armed_entry_id = None
+
+    def _loop_query_has_focus(self) -> bool:
+        try:
+            return self.focused is self.query_one("#loop-query", Input)
+        except Exception:
+            return False
+
+    def _bind_visible_loop(self, loop_id: str, *, render: bool = True) -> bool:
+        if loop_id not in self._visible_loop_ids:
+            return False
+        changed = self.selected_loop_id != loop_id or self._draft_loop_selected
+        self._clear_delete_confirmation()
+        self.selected_loop_id = loop_id
+        self._draft_loop_selected = False
+        if changed and render:
+            self._render_selected()
+        return True
+
     def _detach_missing_selection(self) -> None:
         """Keep edited form values when a selected loop disappears externally."""
         self.selected_loop_id = None
@@ -3181,7 +3213,6 @@ class LoopDashboard(App[None]):
         all_loop_ids = {state.loop_id for state in all_states}
         self._visible_loop_ids = {state.loop_id for state in states}
         table = self.query_one(DataTable)
-        table.clear(columns=False)
 
         if not self._selection_initialized:
             if self.initial_loop_id in all_loop_ids:
@@ -3194,42 +3225,51 @@ class LoopDashboard(App[None]):
         elif self.selected_loop_id and self.selected_loop_id not in all_loop_ids:
             self._detach_missing_selection()
 
+        selected_is_visible = self.selected_loop_id in self._visible_loop_ids
+        preserve_hidden_selection = self._draft_loop_selected or bool(self.loop_query)
+        if states and not selected_is_visible and not preserve_hidden_selection:
+            self._bind_visible_loop(states[0].loop_id, render=False)
+            selected_is_visible = True
+
         self._render_sidebar_stats(states, total_count=len(all_states))
         self._render_system_stats(states)
         table.cursor_type = "row" if states else "none"
-        table.show_cursor = bool(states)
+        table.show_cursor = bool(states and selected_is_visible)
 
-        for state in states:
-            target = state.run_config.steps
-            progress_count = effective_iteration_count(
-                state.completed_iterations,
-                state.current_iteration,
-                state.status,
-            )
-            iteration_text = f"{progress_count}/{target or '∞'}"
-            icon = STATUS_ICONS.get(state.status, "•")
-            mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(state)
-            mode_label = {
-                "fixed": "fixed",
-                "infinite": "infinite",
-                "scheduled": "scheduled",
-            }.get(mode, mode)
-            table.add_row(
-                short_loop_id(state.loop_id),
-                f"{icon} {short_status(state.status)}",
-                iteration_text,
-                mode_label,
-                (state.run_config.agent or "-")[:12],
-                key=state.loop_id,
-            )
+        self._rebuilding_loop_table = True
+        try:
+            table.clear(columns=False)
+            for state in states:
+                target = state.run_config.steps
+                progress_count = effective_iteration_count(
+                    state.completed_iterations,
+                    state.current_iteration,
+                    state.status,
+                )
+                iteration_text = f"{progress_count}/{target or '∞'}"
+                icon = STATUS_ICONS.get(state.status, "•")
+                mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(state)
+                mode_label = {
+                    "fixed": "fixed",
+                    "infinite": "infinite",
+                    "scheduled": "scheduled",
+                }.get(mode, mode)
+                table.add_row(
+                    short_loop_id(state.loop_id),
+                    f"{icon} {short_status(state.status)}",
+                    iteration_text,
+                    mode_label,
+                    (state.run_config.agent or "-")[:12],
+                    key=state.loop_id,
+                )
 
-        if states and self.selected_loop_id in self._visible_loop_ids:
-            try:
-                table.move_cursor(row=table.get_row_index(self.selected_loop_id))
-            except Exception:
-                pass
-        elif states:
-            table.move_cursor(row=0)
+            if states and selected_is_visible:
+                try:
+                    table.move_cursor(row=table.get_row_index(self.selected_loop_id))
+                except Exception:
+                    pass
+        finally:
+            self._rebuilding_loop_table = False
         self._sync_button_state(all_states)
         self._render_selected(all_states)
 
@@ -3248,6 +3288,16 @@ class LoopDashboard(App[None]):
             return self.service.load_loop(self.selected_loop_id)
         except FileNotFoundError:
             return None
+
+    def _action_target_state(self) -> tuple[bool, LoopState | None]:
+        if (
+            self.is_running
+            and self.selected_loop_id is not None
+            and self.selected_loop_id not in self._visible_loop_ids
+        ):
+            self.notify("select a visible loop before using loop actions", severity="warning")
+            return False, None
+        return True, self._selected_state()
 
     def _render_selected(self, states: Sequence[LoopState] | None = None) -> None:
         try:
@@ -3336,13 +3386,16 @@ class LoopDashboard(App[None]):
 
     @on(DataTable.RowSelected)
     def on_loop_selected(self, event: DataTable.RowSelected) -> None:
-        loop_id = str(event.row_key.value)
-        if loop_id not in self._visible_loop_ids:
+        if self._rebuilding_loop_table:
             return
-        self._clear_delete_confirmation()
-        self.selected_loop_id = loop_id
-        self._draft_loop_selected = False
-        self._render_selected()
+        self._bind_visible_loop(str(event.row_key.value))
+
+    @on(DataTable.RowHighlighted)
+    def on_loop_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        table = self.query_one("#loops", DataTable)
+        if self._rebuilding_loop_table or self.focused is not table:
+            return
+        self._bind_visible_loop(str(event.row_key.value))
 
     @on(Button.Pressed)
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -3511,8 +3564,7 @@ class LoopDashboard(App[None]):
     def _apply_memory_query(self, value: str) -> None:
         self.memory_query = value.strip()
         self.memory_index = 0
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_summary_bar()
         self._render_selected()
@@ -3587,8 +3639,7 @@ class LoopDashboard(App[None]):
 
     def _activate_non_memory_log(self, log_kind: LogKind) -> None:
         self.log_kind = log_kind
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_summary_bar()
         self._render_selected()
@@ -3615,8 +3666,7 @@ class LoopDashboard(App[None]):
         self.log_kind = "memory"
         self.memory_filter = memory_filter
         self.memory_index = 0
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_summary_bar()
         self._render_selected()
@@ -3650,8 +3700,7 @@ class LoopDashboard(App[None]):
         if not self._memory_shortcuts_available():
             return
         self._move_memory_selection(-1)
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_selected()
 
@@ -3673,8 +3722,7 @@ class LoopDashboard(App[None]):
         if not self._memory_shortcuts_available():
             return
         self._move_memory_label(-1)
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_selected()
 
@@ -3682,8 +3730,7 @@ class LoopDashboard(App[None]):
         if not self._memory_shortcuts_available():
             return
         self._move_memory_label(1)
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_selected()
 
@@ -3691,8 +3738,7 @@ class LoopDashboard(App[None]):
         if not self._memory_shortcuts_available():
             return
         self.memory_label = None
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self.memory_index = 0
         self._sync_button_state()
         self._render_selected()
@@ -3702,15 +3748,13 @@ class LoopDashboard(App[None]):
             return
         if not self._can_toggle_memory_scope():
             self.memory_all_folders = True
-            self.memory_archive_armed = False
-            self.memory_delete_armed = False
+            self._clear_memory_confirmations()
             self.notify("cwd scope unavailable; showing all folders")
             self._sync_button_state()
             self._render_selected()
             return
         self.memory_all_folders = not self.memory_all_folders
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self.memory_index = 0
         self._sync_button_state()
         self._render_selected()
@@ -3749,8 +3793,7 @@ class LoopDashboard(App[None]):
         if not self._memory_shortcuts_available():
             return
         self._move_memory_selection(1)
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self._sync_button_state()
         self._render_selected()
 
@@ -3760,10 +3803,10 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
-        self._spawn_replay(entry.id, all_folders=self.memory_all_folders)
-        self.notify(f"replay sent: {entry.id}")
+        self._clear_memory_confirmations()
+        if not self._attempt_replay_spawn(entry.id, all_folders=self.memory_all_folders):
+            return
+        self.notify(f"replay launch requested: {entry.id}")
         self.refresh_data()
 
     def action_memory_favorite(self) -> None:
@@ -3772,8 +3815,7 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         updated = self.memory.edit(
             entry.id,
             favorite=not entry.favorite,
@@ -3789,8 +3831,7 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None or not entry.archived:
             return
-        self.memory_archive_armed = False
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self.memory.edit(entry.id, archived=False, folder=self._memory_folder())
         self.notify(f"memory restored: {entry.id}")
         self.refresh_data()
@@ -3801,14 +3842,16 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return
-        if not self.memory_archive_armed:
+        if self._memory_archive_armed_entry_id != entry.id:
             self.memory_archive_armed = True
             self.memory_delete_armed = False
+            self._memory_archive_armed_entry_id = entry.id
+            self._memory_delete_armed_entry_id = None
             self.notify(f"press z again to archive memory: {entry.id}")
             self._sync_button_state()
             return
         self.memory.edit(entry.id, archived=True, folder=self._memory_folder())
-        self.memory_archive_armed = False
+        self._clear_memory_confirmations()
         self.memory_index = 0
         self.notify(f"memory archived: {entry.id}")
         self.refresh_data()
@@ -3819,14 +3862,16 @@ class LoopDashboard(App[None]):
         entry = self._primary_memory_entry()
         if entry is None:
             return
-        if not self.memory_delete_armed:
+        if self._memory_delete_armed_entry_id != entry.id:
             self.memory_delete_armed = True
             self.memory_archive_armed = False
+            self._memory_delete_armed_entry_id = entry.id
+            self._memory_archive_armed_entry_id = None
             self.notify(f"press x again to delete memory: {entry.id}")
             self._sync_button_state()
             return
         self.memory.delete(entry.id, folder=self._memory_folder())
-        self.memory_delete_armed = False
+        self._clear_memory_confirmations()
         self.memory_index = 0
         self.notify(f"memory deleted: {entry.id}")
         self.refresh_data()
@@ -3873,15 +3918,25 @@ class LoopDashboard(App[None]):
             self._spawn_resume(loop_id)
         except RECOVERABLE_SERVICE_ERRORS as exc:
             self.notify(
-                f"{persisted_action} but worker failed to start: {exc}",
+                f"{persisted_action} but worker failed to launch: {exc}",
                 severity="error",
             )
             self._refresh_after_recoverable_failure()
             return False
         return True
 
+    def _attempt_replay_spawn(self, entry_id: str, *, all_folders: bool) -> bool:
+        try:
+            self._spawn_replay(entry_id, all_folders=all_folders)
+        except RECOVERABLE_SERVICE_ERRORS as exc:
+            self.notify(f"replay failed to launch: {exc}", severity="error")
+            return False
+        return True
+
     def action_pause_selected(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             if self._config_mode_value() == "scheduled":
                 self._notify_scheduled_runtime_unavailable()
@@ -3903,7 +3958,9 @@ class LoopDashboard(App[None]):
             self.refresh_data()
 
     def action_resume_selected(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is not None:
             self._clear_delete_confirmation()
             if self._state_mode_and_schedule(state)[0] == "scheduled":
@@ -3922,7 +3979,7 @@ class LoopDashboard(App[None]):
                 persisted_action="resume request saved",
             ):
                 return
-            self.notify(f"resume sent: {state.loop_id}")
+            self.notify(f"resume worker launch requested: {state.loop_id}")
             self.refresh_data()
             return
         if self._config_mode_value() == "scheduled":
@@ -3934,7 +3991,9 @@ class LoopDashboard(App[None]):
         self.action_run_loop()
 
     def action_stop_selected(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             if self._config_mode_value() == "scheduled":
                 self._notify_scheduled_runtime_unavailable()
@@ -3958,7 +4017,9 @@ class LoopDashboard(App[None]):
     def action_save_config(self) -> None:
         if not self._validate_workspace_root():
             return
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             self.notify("config draft captured in the form")
             self._sync_button_state()
@@ -3995,7 +4056,9 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def action_run_loop(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if self._is_scheduled_fail_closed(state):
             self.notify(
                 (
@@ -4048,7 +4111,7 @@ class LoopDashboard(App[None]):
             )
             if state is None:
                 return
-            self.notify(f"run sent: {state.loop_id}")
+            self.notify(f"run worker launch requested: {state.loop_id}")
             self.refresh_data()
             return
         run_config = self._build_run_config_from_form()
@@ -4073,7 +4136,7 @@ class LoopDashboard(App[None]):
             return
         if not self._attempt_worker_spawn(created.loop_id, persisted_action="loop created"):
             return
-        self.notify(f"loop started: {created.loop_id}")
+        self.notify(f"loop worker launch requested: {created.loop_id}")
         self.refresh_data()
 
     def _move_loop_selection(self, delta: int) -> None:
@@ -4108,7 +4171,9 @@ class LoopDashboard(App[None]):
         self.query_one("#follow-up-prompt", TextArea).focus()
 
     def action_queue_follow_up(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             self.notify("select a loop before queueing a follow-up", severity="warning")
             return
@@ -4146,7 +4211,7 @@ class LoopDashboard(App[None]):
             ):
                 return
             self.query_one("#follow-up-prompt", TextArea).text = ""
-            self.notify(f"follow-up queued and next iteration started: {state.loop_id}")
+            self.notify(f"follow-up queued; worker launch requested: {state.loop_id}")
         else:
             self.query_one("#follow-up-prompt", TextArea).text = ""
             self.notify(
@@ -4163,7 +4228,9 @@ class LoopDashboard(App[None]):
         self.action_queue_follow_up()
 
     def action_clear_follow_up(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None or not state.queued_follow_up:
             self.notify("no queued follow-up to clear", severity="warning")
             return
@@ -4191,7 +4258,9 @@ class LoopDashboard(App[None]):
     def action_next_iteration(self) -> None:
         if self._text_input_has_focus():
             return
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             if self._config_mode_value() == "scheduled":
                 self._notify_scheduled_runtime_unavailable()
@@ -4217,11 +4286,13 @@ class LoopDashboard(App[None]):
             persisted_action="next iteration queued",
         ):
             return
-        self.notify(f"next iteration queued: {state.loop_id}")
+        self.notify(f"next iteration queued; worker launch requested: {state.loop_id}")
         self.refresh_data()
 
     def action_restart_selected(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             return
         if self._state_mode_and_schedule(state)[0] == "scheduled":
@@ -4237,11 +4308,13 @@ class LoopDashboard(App[None]):
         )
         if state is None:
             return
-        self.notify(f"restart sent: {state.loop_id}")
+        self.notify(f"restart worker launch requested: {state.loop_id}")
         self.refresh_data()
 
     def action_restart_reset_selected(self) -> None:
-        state = self._selected_state()
+        target_available, state = self._action_target_state()
+        if not target_available:
+            return
         if state is None:
             return
         if self._state_mode_and_schedule(state)[0] == "scheduled":
@@ -4258,7 +4331,7 @@ class LoopDashboard(App[None]):
         )
         if state is None:
             return
-        self.notify(f"counter reset; restart sent: {state.loop_id}")
+        self.notify(f"counter reset; restart worker launch requested: {state.loop_id}")
         self.refresh_data()
 
     def _request_restart_and_spawn(
@@ -4294,7 +4367,9 @@ class LoopDashboard(App[None]):
     def action_remove_selected(self) -> None:
         if self.selected_loop_id:
             selected_loop_id = self.selected_loop_id
-            state = self._selected_state()
+            target_available, state = self._action_target_state()
+            if not target_available:
+                return
             if self._is_scheduled_fail_closed(state):
                 self.notify(
                     (
