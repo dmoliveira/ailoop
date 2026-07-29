@@ -1,6 +1,6 @@
 [project]
 name = "ai-loop"
-version = "0.2.2"
+version = "0.2.3"
 description = "Simple resilient loop runner for AI terminal tools"
 readme = "README.md"
 requires-python = ">=3.11"

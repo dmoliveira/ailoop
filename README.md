@@ -60,10 +60,11 @@ uv run ailoop init-config
 uv run ailoop run "Do exactly 3 iterations." --steps 3
 ```
 
-Or install globally:
+Or download the wheel from the
+[latest GitHub release](https://github.com/dmoliveira/ailoop/releases/latest), then install it:
 
 ```bash
-pipx install https://github.com/dmoliveira/ailoop/releases/download/v0.2.2/ai_loop-0.2.2-py3-none-any.whl
+pipx install ./ai_loop-*-py3-none-any.whl
 ailoop --help
 ```
 
