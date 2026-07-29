@@ -7,6 +7,7 @@
 - [runners.md](runners.md) — runner model and command templates
 - [examples.md](examples.md) — copy-paste command examples
 - [release-launch.md](release-launch.md) — GitHub artifact, release, and launch workflow
+- [release-notes-v0.2.4.md](release-notes-v0.2.4.md) — v0.2.4 transactional TUI hardening fixes
 - [release-notes-v0.2.3.md](release-notes-v0.2.3.md) — v0.2.3 corrective runtime and TUI fixes
 - [release-notes-v0.2.2.md](release-notes-v0.2.2.md) — v0.2.2 data-integrity and capability-honesty fixes
 - [release-notes-v0.2.1.md](release-notes-v0.2.1.md) — v0.2.1 lifecycle safety fixes
