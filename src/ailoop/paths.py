@@ -34,13 +34,13 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
-def read_last_lines(path: Path, lines: int) -> str:
+def read_last_lines(path: Path, lines: int, *, errors: str = "strict") -> str:
     if not path.exists():
         raise FileNotFoundError(f"File not found: {path}")
     if lines <= 0:
         return ""
     tail = deque(maxlen=lines)
-    with path.open() as handle:
+    with path.open(encoding="utf-8", errors=errors) as handle:
         for line in handle:
             tail.append(line.rstrip("\n"))
     return "\n".join(tail)

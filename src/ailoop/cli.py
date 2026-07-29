@@ -84,18 +84,20 @@ RUNNING_STATUSES = {"running", "pause_requested", "stop_requested", "cleanup_fai
 ACTIVE_STATUSES = RUNNING_STATUSES | {"paused", "idle"}
 
 
-def _read_log_excerpt(path: Path, lines: int) -> str:
+def _read_log_excerpt(path: Path, lines: int, *, kind: str) -> str:
     if not path.exists():
         raise FileNotFoundError(f"Log file not found: {path}")
-    return read_last_lines(path, lines)
+    errors = "replace" if kind in {"stdout", "stderr"} else "strict"
+    return read_last_lines(path, lines, errors=errors)
 
 
-def _read_log_content(path: Path, *, tail_lines: int | None = None) -> str:
+def _read_log_content(path: Path, *, kind: str, tail_lines: int | None = None) -> str:
     if not path.exists():
         return "<missing>"
+    errors = "replace" if kind in {"stdout", "stderr"} else "strict"
     if tail_lines is not None:
-        return read_last_lines(path, tail_lines)
-    return path.read_text()
+        return read_last_lines(path, tail_lines, errors=errors)
+    return path.read_text(encoding="utf-8", errors=errors)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -918,7 +920,7 @@ def main() -> None:
                         "path": str(path),
                         "exists": path.exists(),
                         "content": (
-                            _read_log_content(path, tail_lines=args.tail_lines)
+                            _read_log_content(path, kind=kind, tail_lines=args.tail_lines)
                             if args.print_content
                             else None
                         ),
@@ -929,12 +931,12 @@ def main() -> None:
                 path = paths[kind]
                 print(f"[{kind}] {path}")
                 if args.print_content:
-                    print(_read_log_content(path, tail_lines=args.tail_lines))
+                    print(_read_log_content(path, kind=kind, tail_lines=args.tail_lines))
             return
 
         if args.command == "tail":
             paths = service.loop_paths(args.loop_id, iteration=args.iteration)
-            print(_read_log_excerpt(paths[args.kind], args.lines))
+            print(_read_log_excerpt(paths[args.kind], args.lines, kind=args.kind))
             return
 
         if args.command == "remove":

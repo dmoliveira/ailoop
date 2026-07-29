@@ -81,10 +81,10 @@ def launch_in_tmux(config_path: Path, loop_id: str | None = None) -> None:
     subprocess.run(command, check=True)
 
 
-def tail_text(path: Path, lines: int = 400) -> str:
+def tail_text(path: Path, lines: int = 400, *, errors: str = "strict") -> str:
     if not path.exists():
         return "<missing>"
-    return read_last_lines(path, lines)
+    return read_last_lines(path, lines, errors=errors)
 
 
 def read_events(path: Path, limit: int = 80) -> str:
@@ -3325,7 +3325,14 @@ class LoopDashboard(App[None]):
         if not paths:
             log_view.update("No logs yet.")
             return
-        log_view.update(colorize_log_text(tail_text(paths[self.log_kind])))
+        log_view.update(
+            colorize_log_text(
+                tail_text(
+                    paths[self.log_kind],
+                    errors="replace" if self.log_kind in {"stdout", "stderr"} else "strict",
+                )
+            )
+        )
 
     @on(DataTable.RowSelected)
     def on_loop_selected(self, event: DataTable.RowSelected) -> None:
