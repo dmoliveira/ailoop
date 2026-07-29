@@ -286,7 +286,7 @@ class LoopService:
     ) -> LoopState:
         with self.store.acquire_lock(loop_id):
             with self.store.mutate(loop_id) as state:
-                if self._is_scheduled(state):
+                if dashboard_config.get("mode") == "scheduled":
                     raise RuntimeError(f"Scheduled loops cannot be restarted manually: {loop_id}")
                 if state.status in FAIL_CLOSED_STATUSES:
                     raise RuntimeError(f"Loop is already active: {loop_id}")
