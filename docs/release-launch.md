@@ -62,60 +62,153 @@ gh repo edit dmoliveira/ailoop \
   --add-topic python
 ```
 
-## 3) Build GitHub release artifacts
+## 3) Validate and build from the merged release commit
 
-Build the wheel and source distribution from the validated release commit:
+Merge the release-preparation PR first. Capture its GitHub-reported merge commit once and verify the
+exact `main` push CI run before building anything that will be published:
 
 ```bash
-rm -rf dist
-uv run coverage erase
-uv build
-uvx twine check dist/ai_loop-*.whl dist/ai_loop-*.tar.gz
-(cd dist && shasum -a 256 ai_loop-*.whl ai_loop-*.tar.gz > SHA256SUMS)
+PR=<release-pr-number>
+RELEASE_SHA="$(gh pr view "$PR" --json mergeCommit --jq .mergeCommit.oid)"
+git fetch --prune origin
+git merge-base --is-ancestor "$RELEASE_SHA" origin/main
+
+RUN_ID="$(gh run list --branch main --workflow CI --limit 20 \
+  --json databaseId,headSha \
+  --jq ".[] | select(.headSha == \"$RELEASE_SHA\") | .databaseId" | head -1)"
+test -n "$RUN_ID"
+gh run watch "$RUN_ID" --exit-status --interval 10
+gh run view "$RUN_ID" --json headSha,conclusion,jobs \
+  --jq '{headSha,conclusion,jobs:[.jobs[]|{name,conclusion}]}'
 ```
 
-Verify the wheel in a clean environment before publishing:
+Require successful `Python 3.11` and `Python 3.13` jobs. A canceled, superseded, or differently
+addressed run is not sufficient.
+
+Create a fresh detached worktree at that exact SHA. Build and validate the only artifacts eligible
+for publication there; pre-merge or earlier local artifacts are disposable:
 
 ```bash
-SMOKE_DIR="$(mktemp -d)"
-uv venv --seed --python 3.11 "$SMOKE_DIR"
-"$SMOKE_DIR/bin/pip" install dist/ai_loop-0.2.6-py3-none-any.whl
-"$SMOKE_DIR/bin/ailoop" --help
+RELEASE_WORKTREE="$(mktemp -d)"
+git worktree add --detach "$RELEASE_WORKTREE" "$RELEASE_SHA"
+test "$(git -C "$RELEASE_WORKTREE" rev-parse HEAD)" = "$RELEASE_SHA"
+
+(
+  cd "$RELEASE_WORKTREE"
+  python3 -c 'import shutil; shutil.rmtree("dist", ignore_errors=True)'
+  uv sync --frozen --all-groups
+  uv build --out-dir dist
+  uvx twine check \
+    dist/ai_loop-0.2.7-py3-none-any.whl \
+    dist/ai_loop-0.2.7.tar.gz
+  python3 -c 'from pathlib import Path; Path("dist/.gitignore").unlink(missing_ok=True)'
+  python3 - <<'PY'
+from pathlib import Path
+expected = {
+    "ai_loop-0.2.7-py3-none-any.whl",
+    "ai_loop-0.2.7.tar.gz",
+}
+actual = {path.name for path in Path("dist").iterdir()}
+assert actual == expected, (actual, expected)
+PY
+  (cd dist && shasum -a 256 \
+    ai_loop-0.2.7-py3-none-any.whl \
+    ai_loop-0.2.7.tar.gz > SHA256SUMS)
+)
+
+TRUSTED_MANIFEST="$(mktemp)"
+cp "$RELEASE_WORKTREE/dist/SHA256SUMS" "$TRUSTED_MANIFEST"
+```
+
+Smoke-test the wheel and source distribution separately in clean Python 3.11 environments:
+
+```bash
+WHEEL_SMOKE="$(mktemp -d)"
+SDIST_SMOKE="$(mktemp -d)"
+uv venv --seed --python 3.11 "$WHEEL_SMOKE"
+uv venv --seed --python 3.11 "$SDIST_SMOKE"
+"$WHEEL_SMOKE/bin/pip" install --no-input \
+  "$RELEASE_WORKTREE/dist/ai_loop-0.2.7-py3-none-any.whl"
+"$SDIST_SMOKE/bin/pip" install --no-input \
+  "$RELEASE_WORKTREE/dist/ai_loop-0.2.7.tar.gz"
+
+for ENVIRONMENT in "$WHEEL_SMOKE" "$SDIST_SMOKE"; do
+  "$ENVIRONMENT/bin/python" -c \
+    'import ailoop; from importlib.metadata import version; assert version("ai-loop") == ailoop.__version__ == "0.2.7"'
+  "$ENVIRONMENT/bin/ailoop" --help
+done
 ```
 
 PyPI publication is not currently configured; release artifacts are hosted on GitHub.
 
-## 4) Git tag + GitHub release
+## 4) Tag, publish, and independently verify
 
-Create and push an annotated tag from the exact merged release-PR commit, then use that
-verified tag for the GitHub release:
-
-Before tagging, wait for the `main` CI workflow on that exact commit and verify both the
-Python 3.11 and Python 3.13 jobs passed. Also confirm that neither the remote tag nor the
-GitHub release already exists.
+Immediately before tagging, check every release namespace. Any unexpected collision stops the
+release; never force, move, delete, or recreate a published tag:
 
 ```bash
-RELEASE_SHA=<merged-release-sha>
-git tag -a v0.2.6 "$RELEASE_SHA" -m "ailoop v0.2.6"
-git push origin v0.2.6
-gh release create v0.2.6 \
-  dist/ai_loop-0.2.6-py3-none-any.whl \
-  dist/ai_loop-0.2.6.tar.gz \
-  dist/SHA256SUMS \
-  --verify-tag \
-  --title "ailoop v0.2.6" \
-  --notes-file docs/release-notes-v0.2.6.md
+test -z "$(git tag --list v0.2.7)"
+test -z "$(git ls-remote --tags origin refs/tags/v0.2.7)"
+if gh release view v0.2.7 >/dev/null 2>&1; then
+  echo "v0.2.7 GitHub release already exists" >&2
+  exit 1
+fi
 ```
 
-Then verify the tag, checksums, assets, and wheel install from the published release.
+Create and push an annotated tag from the recorded merged SHA, then publish exactly the validated
+assets from the detached worktree:
 
 ```bash
-VERIFY_DIR=$(mktemp -d)
-gh release download v0.2.6 --dir "$VERIFY_DIR"
+git tag -a v0.2.7 "$RELEASE_SHA" -m "ailoop v0.2.7"
+test "$(git rev-parse 'v0.2.7^{}')" = "$RELEASE_SHA"
+git push origin v0.2.7
+
+gh release create v0.2.7 \
+  "$RELEASE_WORKTREE/dist/ai_loop-0.2.7-py3-none-any.whl" \
+  "$RELEASE_WORKTREE/dist/ai_loop-0.2.7.tar.gz" \
+  "$RELEASE_WORKTREE/dist/SHA256SUMS" \
+  --verify-tag \
+  --title "ailoop v0.2.7" \
+  --notes-file "$RELEASE_WORKTREE/docs/release-notes-v0.2.7.md"
+```
+
+If the tag push succeeds but release creation fails, resume only when the existing annotated tag
+peels to `RELEASE_SHA`. If it targets anything else, stop and issue a new version; never retag.
+
+Download into a new directory, require the exact three assets, compare the downloaded manifest to
+the preserved trusted copy, and smoke both downloaded distributions:
+
+```bash
+VERIFY_DIR="$(mktemp -d)"
+gh release download v0.2.7 --dir "$VERIFY_DIR"
+python3 - "$VERIFY_DIR" <<'PY'
+from pathlib import Path
+import sys
+expected = {
+    "ai_loop-0.2.7-py3-none-any.whl",
+    "ai_loop-0.2.7.tar.gz",
+    "SHA256SUMS",
+}
+actual = {path.name for path in Path(sys.argv[1]).iterdir()}
+assert actual == expected, (actual, expected)
+PY
+cmp "$TRUSTED_MANIFEST" "$VERIFY_DIR/SHA256SUMS"
 (cd "$VERIFY_DIR" && shasum -a 256 -c SHA256SUMS)
-python3 -m venv "$VERIFY_DIR/venv"
-"$VERIFY_DIR/venv/bin/pip" install "$VERIFY_DIR/ai_loop-0.2.6-py3-none-any.whl"
-"$VERIFY_DIR/venv/bin/ailoop" --help
+
+for PACKAGE in \
+  "$VERIFY_DIR/ai_loop-0.2.7-py3-none-any.whl" \
+  "$VERIFY_DIR/ai_loop-0.2.7.tar.gz"; do
+  INSTALL_ENV="$(mktemp -d)"
+  uv venv --seed --python 3.11 "$INSTALL_ENV"
+  "$INSTALL_ENV/bin/pip" install --no-input "$PACKAGE"
+  "$INSTALL_ENV/bin/python" -c \
+    'import ailoop; from importlib.metadata import version; assert version("ai-loop") == ailoop.__version__ == "0.2.7"'
+  "$INSTALL_ENV/bin/ailoop" --help
+done
+
+REMOTE_RELEASE_SHA="$(git ls-remote origin 'refs/tags/v0.2.7^{}' | awk '{print $1}')"
+test "$REMOTE_RELEASE_SHA" = "$RELEASE_SHA"
+gh release view v0.2.7 --json url,tagName,isDraft,isPrerelease,publishedAt,assets
 ```
 
 ## 5) Release notes
@@ -180,7 +273,8 @@ Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 - support link works
 - wheel and source distribution are attached
 - SHA-256 checksums are attached
-- clean-wheel install smoke passes
-- `v0.2.6^{}` peels to the exact merged release commit
+- clean wheel and source-distribution install smokes pass
+- exact merged-SHA Python 3.11 and Python 3.13 CI passes
+- `v0.2.7^{}` peels to the exact merged release commit
 - GitHub release is published
 - GitHub release assets and notes are verified
