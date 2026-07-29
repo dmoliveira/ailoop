@@ -57,6 +57,33 @@ def process_group_exists(process_group_id: int) -> bool:
     return True
 
 
+def inject_postappend_event_failure(
+    monkeypatch,
+    service: LoopService,
+    event_name: str,
+) -> None:
+    original_append = service.store.append_event
+    failed = False
+
+    def append_then_fail(loop_id: str, event: dict) -> bool:
+        nonlocal failed
+        appended = original_append(loop_id, event)
+        if event.get("event") == event_name and not failed:
+            failed = True
+            raise OSError(f"{event_name} event durability uncertain")
+        return appended
+
+    monkeypatch.setattr(service.store, "append_event", append_then_fail)
+
+
+def count_events(tmp_path: Path, loop_id: str, event_name: str) -> int:
+    events_path = tmp_path / loop_id / "events.jsonl"
+    return sum(
+        json.loads(line).get("event") == event_name
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+    )
+
+
 def test_control_commit_then_removal_cannot_recreate_ghost_loop(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     service.create_loop(make_config(), loop_id="event-race")
@@ -79,6 +106,75 @@ def test_control_commit_then_removal_cannot_recreate_ghost_loop(tmp_path: Path) 
 
     assert not (tmp_path / "event-race").exists()
     assert service.list_loops() == []
+
+
+def test_single_iteration_executes_once_after_ambiguous_event_append(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_config(steps=None), loop_id="ambiguous-single")
+    inject_postappend_event_failure(monkeypatch, service, "single_iteration_requested")
+    runner_calls = 0
+    original_run = service.runner.run
+
+    def count_run(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal runner_calls
+        runner_calls += 1
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(service.runner, "run", count_run)
+
+    service.request_single_iteration(state.loop_id)
+    final = service.run_loop(state.loop_id)
+
+    assert final.status == "paused"
+    assert final.completed_iterations == 1
+    assert final.pending_single_iteration is False
+    assert runner_calls == 1
+    assert count_events(tmp_path, state.loop_id, "single_iteration_requested") == 1
+
+
+def test_synchronous_resume_executes_once_after_ambiguous_event_append(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_config(), loop_id="ambiguous-sync-resume")
+    service.request_control(state.loop_id, "pause")
+    inject_postappend_event_failure(monkeypatch, service, "resumed")
+    runner_calls = 0
+    original_run = service.runner.run
+
+    def count_run(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal runner_calls
+        runner_calls += 1
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(service.runner, "run", count_run)
+
+    final = service.resume_loop(state.loop_id)
+
+    assert final.status == "completed"
+    assert final.completed_iterations == 1
+    assert runner_calls == 1
+    assert count_events(tmp_path, state.loop_id, "resumed") == 1
+
+
+def test_startup_terminal_state_survives_ambiguous_event_append(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_config(), loop_id="ambiguous-startup")
+    service.request_control(state.loop_id, "stop")
+    inject_postappend_event_failure(monkeypatch, service, "stopped")
+
+    final = service.run_loop(state.loop_id)
+
+    assert final.status == "stopped"
+    assert service.load_loop(state.loop_id).status == "stopped"
+    assert count_events(tmp_path, state.loop_id, "stopped") == 1
 
 
 @pytest.mark.parametrize(
@@ -481,7 +577,8 @@ def test_post_final_event_failure_does_not_rollback_iteration(
 
     def fail_completed_event(loop_id: str, event: dict) -> bool:
         if event.get("event") == "iteration_completed":
-            raise RuntimeError("event sink failed")
+            original_append(loop_id, event)
+            raise OSError("event sink durability uncertain")
         return original_append(loop_id, event)
 
     service.store.append_event = fail_completed_event  # type: ignore[method-assign]
@@ -494,6 +591,7 @@ def test_post_final_event_failure_does_not_rollback_iteration(
     assert len(finalized.iterations) == 1
     assert finalized.pending_single_iteration is False
     assert finalized.queued_follow_up is None
+    assert count_events(tmp_path, state.loop_id, "iteration_completed") == 1
 
 
 def test_post_final_failure_does_not_strand_continuing_loop_as_running(
@@ -505,7 +603,8 @@ def test_post_final_failure_does_not_strand_continuing_loop_as_running(
 
     def fail_completed_event(loop_id: str, event: dict) -> bool:
         if event.get("event") == "iteration_completed":
-            raise RuntimeError("event sink failed")
+            original_append(loop_id, event)
+            raise OSError("event sink durability uncertain")
         return original_append(loop_id, event)
 
     service.store.append_event = fail_completed_event  # type: ignore[method-assign]
@@ -516,6 +615,7 @@ def test_post_final_failure_does_not_strand_continuing_loop_as_running(
     assert finalized.status == "completed"
     assert finalized.completed_iterations == 2
     assert len(finalized.iterations) == 2
+    assert count_events(tmp_path, state.loop_id, "iteration_completed") == 2
 
 
 def test_event_append_flushes_and_fsyncs(monkeypatch, tmp_path: Path) -> None:

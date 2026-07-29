@@ -1,3 +1,5 @@
+import fcntl
+import json
 from pathlib import Path
 
 import pytest
@@ -98,7 +100,14 @@ def test_create_loop_rolls_back_all_recoverable_creation_failures(
 @pytest.mark.parametrize("event_failure", ["false", "exception"])
 @pytest.mark.parametrize(
     "operation",
-    ["control", "resume", "follow-up", "clear-follow-up", "single-iteration"],
+    [
+        "control",
+        "resume",
+        "follow-up",
+        "follow-up-only",
+        "clear-follow-up",
+        "single-iteration",
+    ],
 )
 def test_committed_intents_survive_event_failures(
     tmp_path: Path,
@@ -111,31 +120,73 @@ def test_committed_intents_survive_event_failures(
     if operation == "clear-follow-up":
         service.queue_follow_up(state.loop_id, "queued")
 
+    original_append = service.store.append_event
     if event_failure == "false":
         monkeypatch.setattr(service.store, "append_event", lambda *_args, **_kwargs: False)
     else:
-        monkeypatch.setattr(
-            service.store,
-            "append_event",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("event unavailable")),
-        )
 
+        def append_then_fail(loop_id: str, event: dict) -> bool:
+            original_append(loop_id, event)
+            raise OSError("event durability uncertain")
+
+        monkeypatch.setattr(service.store, "append_event", append_then_fail)
+
+    expected_event: str
     if operation == "control":
         result = service.request_control(state.loop_id, "pause")
         assert result.status == "paused"
+        expected_event = "control"
     elif operation == "resume":
         result = service.request_resume(state.loop_id)
         assert result.control == "run"
+        expected_event = "resume_requested"
     elif operation == "follow-up":
         result = service.queue_follow_up(state.loop_id, "run this", run_next=True)
         assert result.pending_single_iteration is True
+        expected_event = "follow_up_queued"
+    elif operation == "follow-up-only":
+        result = service.queue_follow_up(state.loop_id, "save this")
+        assert result.pending_single_iteration is False
+        expected_event = "follow_up_queued"
     elif operation == "clear-follow-up":
         result = service.clear_follow_up(state.loop_id)
         assert result.queued_follow_up is None
+        expected_event = "follow_up_cleared"
     elif operation == "single-iteration":
         result = service.request_single_iteration(state.loop_id)
         assert result.pending_single_iteration is True
+        expected_event = "single_iteration_requested"
     assert service.load_loop(state.loop_id).to_dict() == result.to_dict()
+    event_names = [
+        json.loads(line)["event"]
+        for line in (tmp_path / state.loop_id / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert event_names.count(expected_event) == (1 if event_failure == "exception" else 0)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("contract error"), TypeError("serialization error"), ValueError("bad event")],
+)
+def test_postcommit_event_does_not_swallow_programming_errors(
+    tmp_path: Path,
+    monkeypatch,
+    error: Exception,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_service_run_config(), loop_id="event-programming-error")
+    monkeypatch.setattr(
+        service.store,
+        "append_event",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    with pytest.raises(type(error), match=str(error)):
+        service.request_control(state.loop_id, "pause")
+
+    assert service.load_loop(state.loop_id).status == "paused"
 
 
 def test_postcommit_event_does_not_swallow_keyboard_interrupt(tmp_path: Path, monkeypatch) -> None:
@@ -151,6 +202,52 @@ def test_postcommit_event_does_not_swallow_keyboard_interrupt(tmp_path: Path, mo
         service.request_control(state.loop_id, "pause")
 
     assert service.load_loop(state.loop_id).status == "paused"
+
+
+def test_create_loop_rolls_back_after_ambiguous_event_append(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = LoopService(tmp_path)
+    original_append = service.store.append_event
+
+    def append_then_fail(loop_id: str, event: dict) -> bool:
+        original_append(loop_id, event)
+        raise OSError("creation event durability uncertain")
+
+    monkeypatch.setattr(service.store, "append_event", append_then_fail)
+
+    with pytest.raises(OSError, match="creation event durability uncertain"):
+        service.create_loop(make_service_run_config(), "ambiguous-creation")
+
+    assert not raw_loop_dir(tmp_path, "ambiguous-creation").exists()
+    with pytest.raises(FileNotFoundError):
+        service.load_loop("ambiguous-creation")
+
+
+def test_committed_intent_survives_lock_teardown_failures(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_service_run_config(), loop_id="intent-unlock-failure")
+    original_flock = fcntl.flock
+    unlock_attempts = 0
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        nonlocal unlock_attempts
+        if operation == fcntl.LOCK_UN:
+            unlock_attempts += 1
+            raise OSError("unlock failed")
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr("ailoop.state.fcntl.flock", fail_unlock)
+
+    committed = service.request_single_iteration(state.loop_id)
+
+    assert committed.pending_single_iteration is True
+    assert service.load_loop(state.loop_id).pending_single_iteration is True
+    assert unlock_attempts >= 3
 
 
 def test_precommit_state_failure_still_raises_without_event_attempt(

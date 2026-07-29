@@ -111,12 +111,24 @@ class StateStore:
     def acquire_mutation_lock(self, loop_id: str) -> Iterator[None]:
         path = mutation_lock_file(self.state_root, loop_id)
         ensure_dir(path.parent)
-        with path.open("a", encoding="utf-8") as handle:
+        handle = path.open("a", encoding="utf-8")
+        acquired = False
+        try:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            acquired = True
+            yield
+        finally:
+            # The protected operation may already have committed. Preserve its
+            # result or primary exception while still attempting both cleanup steps.
+            if acquired:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
             try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                handle.close()
+            except OSError:
+                pass
 
     @contextmanager
     def mutate(self, loop_id: str) -> Iterator[LoopState]:
@@ -193,17 +205,27 @@ class StateStore:
     def acquire_lock(self, loop_id: str) -> Iterator[None]:
         path = lock_file(self.state_root, loop_id)
         ensure_dir(path.parent)
-        with path.open("a+", encoding="utf-8") as handle:
+        handle = path.open("a+", encoding="utf-8")
+        acquired = False
+        try:
             try:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError as exc:
                 raise RuntimeError(f"Loop is already active: {loop_id}") from exc
+            acquired = True
             handle.seek(0)
             handle.truncate()
             handle.write(str(os.getpid()))
             handle.flush()
             os.fsync(handle.fileno())
+            yield
+        finally:
+            if acquired:
+                try:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                except OSError:
+                    pass
             try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                handle.close()
+            except OSError:
+                pass

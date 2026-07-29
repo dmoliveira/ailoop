@@ -47,7 +47,7 @@ class LoopService:
         """Best-effort journal write after state is already authoritative."""
         try:
             return self.store.append_event(loop_id, event)
-        except (OSError, RuntimeError, TypeError, ValueError):
+        except OSError:
             return False
 
     def _normalize_workspace_root(self, workspace_root: str | None) -> str | None:
