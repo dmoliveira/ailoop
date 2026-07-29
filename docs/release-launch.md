@@ -79,7 +79,7 @@ Verify the wheel in a clean environment before publishing:
 ```bash
 SMOKE_DIR="$(mktemp -d)"
 uv venv --seed --python 3.11 "$SMOKE_DIR"
-"$SMOKE_DIR/bin/pip" install dist/ai_loop-0.2.5-py3-none-any.whl
+"$SMOKE_DIR/bin/pip" install dist/ai_loop-0.2.6-py3-none-any.whl
 "$SMOKE_DIR/bin/ailoop" --help
 ```
 
@@ -96,25 +96,25 @@ GitHub release already exists.
 
 ```bash
 RELEASE_SHA=<merged-release-sha>
-git tag -a v0.2.5 "$RELEASE_SHA" -m "ailoop v0.2.5"
-git push origin v0.2.5
-gh release create v0.2.5 \
-  dist/ai_loop-0.2.5-py3-none-any.whl \
-  dist/ai_loop-0.2.5.tar.gz \
+git tag -a v0.2.6 "$RELEASE_SHA" -m "ailoop v0.2.6"
+git push origin v0.2.6
+gh release create v0.2.6 \
+  dist/ai_loop-0.2.6-py3-none-any.whl \
+  dist/ai_loop-0.2.6.tar.gz \
   dist/SHA256SUMS \
   --verify-tag \
-  --title "ailoop v0.2.5" \
-  --notes-file docs/release-notes-v0.2.5.md
+  --title "ailoop v0.2.6" \
+  --notes-file docs/release-notes-v0.2.6.md
 ```
 
 Then verify the tag, checksums, assets, and wheel install from the published release.
 
 ```bash
 VERIFY_DIR=$(mktemp -d)
-gh release download v0.2.5 --dir "$VERIFY_DIR"
+gh release download v0.2.6 --dir "$VERIFY_DIR"
 (cd "$VERIFY_DIR" && shasum -a 256 -c SHA256SUMS)
 python3 -m venv "$VERIFY_DIR/venv"
-"$VERIFY_DIR/venv/bin/pip" install "$VERIFY_DIR/ai_loop-0.2.5-py3-none-any.whl"
+"$VERIFY_DIR/venv/bin/pip" install "$VERIFY_DIR/ai_loop-0.2.6-py3-none-any.whl"
 "$VERIFY_DIR/venv/bin/ailoop" --help
 ```
 
@@ -181,6 +181,6 @@ Support: https://buy.stripe.com/8x200i8bSgVe3Vl3g8bfO00
 - wheel and source distribution are attached
 - SHA-256 checksums are attached
 - clean-wheel install smoke passes
-- `v0.2.5^{}` peels to the exact merged release commit
+- `v0.2.6^{}` peels to the exact merged release commit
 - GitHub release is published
 - GitHub release assets and notes are verified
