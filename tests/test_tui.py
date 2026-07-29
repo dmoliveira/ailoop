@@ -1380,6 +1380,7 @@ def test_memory_label_next_cycles_labels(tmp_path: Path) -> None:
     )
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
+    app.log_kind = "memory"
     app._sync_button_state = lambda: None  # type: ignore[method-assign]
     app._render_selected = lambda: None  # type: ignore[method-assign]
     app.action_memory_label_next()
@@ -1414,11 +1415,144 @@ def test_memory_label_clear_resets_filter(tmp_path: Path) -> None:
     )
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     app.memory = memory
+    app.log_kind = "memory"
     app.memory_label = "ops"
     app._sync_button_state = lambda: None  # type: ignore[method-assign]
     app._render_selected = lambda: None  # type: ignore[method-assign]
     app.action_memory_label_clear()
     assert app.memory_label is None
+
+
+@pytest.mark.parametrize(
+    "action_name",
+    [
+        "action_memory_prev",
+        "action_memory_next",
+        "action_memory_label_prev",
+        "action_memory_label_next",
+        "action_memory_label_clear",
+        "action_memory_replay",
+        "action_memory_favorite",
+        "action_memory_restore",
+        "action_memory_archive",
+        "action_memory_delete",
+    ],
+)
+def test_memory_shortcuts_fail_closed_outside_memory_view(action_name: str) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.log_kind = "stdout"
+    app.memory_index = 2
+    app.memory_label = "ops"
+
+    getattr(app, action_name)()
+
+    assert app.memory_index == 2
+    assert app.memory_label == "ops"
+    assert app.memory_archive_armed is False
+    assert app.memory_delete_armed is False
+
+
+@pytest.mark.parametrize(
+    "action_name",
+    [
+        "action_memory_prev",
+        "action_memory_next",
+        "action_memory_label_prev",
+        "action_memory_label_next",
+        "action_memory_label_clear",
+        "action_memory_replay",
+        "action_memory_favorite",
+        "action_memory_restore",
+        "action_memory_archive",
+        "action_memory_delete",
+    ],
+)
+def test_memory_shortcuts_fail_closed_while_editing(action_name: str) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.log_kind = "memory"
+    app.memory_index = 2
+    app.memory_label = "ops"
+    app._text_input_has_focus = lambda: True  # type: ignore[method-assign]
+
+    getattr(app, action_name)()
+
+    assert app.memory_index == 2
+    assert app.memory_label == "ops"
+    assert app.memory_archive_armed is False
+    assert app.memory_delete_armed is False
+
+
+@pytest.mark.parametrize(
+    "action_name",
+    [
+        "action_set_log_stdout",
+        "action_set_log_stderr",
+        "action_set_log_prompt",
+        "action_set_log_events",
+        "action_set_log_metrics",
+        "action_set_log_history",
+    ],
+)
+def test_leaving_memory_clears_destructive_confirmations(action_name: str) -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.log_kind = "memory"
+    app.memory_archive_armed = True
+    app.memory_delete_armed = True
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app._render_summary_bar = lambda: None  # type: ignore[method-assign]
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+
+    getattr(app, action_name)()
+
+    assert app.log_kind != "memory"
+    assert app.memory_archive_armed is False
+    assert app.memory_delete_armed is False
+
+
+def test_memory_bindings_are_inert_when_hidden_or_editing(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    entry = memory.create(
+        kind="preset",
+        title="Safe entry",
+        run_config=make_loop_config(),
+        folder=Path.cwd(),
+        labels=["ops"],
+    )
+    spawned: list[str] = []
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.memory = memory
+        app._spawn_replay = lambda entry_id, **kwargs: spawned.append(entry_id)  # type: ignore[method-assign]
+        async with app.run_test() as pilot:
+            app.query_one("#loops", DataTable).focus()
+            await pilot.press("9", "z", "z", "8", "]", "n")
+            assert memory.load(entry.id, folder=Path.cwd()).favorite is False
+            assert memory.load(entry.id, folder=Path.cwd()).archived is False
+            assert spawned == []
+            assert app.memory_index == 0
+            assert app.memory_label is None
+
+            await pilot.press("7")
+            assert app.log_kind == "memory"
+            app.query_one("#config-prompt", TextArea).focus()
+            await pilot.press("9")
+            app.query_one("#memory-query", Input).focus()
+            await pilot.press("z", "z")
+            assert memory.load(entry.id, folder=Path.cwd()).favorite is False
+            assert memory.load(entry.id, folder=Path.cwd()).archived is False
+            assert spawned == []
+
+            app.memory_archive_armed = True
+            app.memory_delete_armed = True
+            event = type("Evt", (), {"button": type("Btn", (), {"id": "log-stdout"})()})()
+            app.on_button_pressed(event)
+            assert app.memory_archive_armed is False
+            assert app.memory_delete_armed is False
+
+    import asyncio
+
+    asyncio.run(run_test())
 
 
 def test_memory_detail_text_lists_query_controls(tmp_path: Path) -> None:
@@ -2033,7 +2167,7 @@ def test_memory_detail_text_uses_memory_specific_empty_state(tmp_path: Path) -> 
     text = app._memory_detail_text()
     assert "memory overview" in text
     assert "no memory entry is selected" in text
-    assert "press 5 to switch this view" in text.lower()
+    assert "press 7 to switch this view" in text.lower()
 
 
 def test_memory_detail_text_uses_archived_empty_state(tmp_path: Path) -> None:
@@ -2044,7 +2178,7 @@ def test_memory_detail_text_uses_archived_empty_state(tmp_path: Path) -> None:
     text = app._memory_detail_text()
     assert "memory overview" in text
     assert "no archived entries match this view" in text
-    assert "press 5 to return to all entries" in text.lower()
+    assert "press 7 to return to all entries" in text.lower()
 
 
 def test_memory_query_placeholder_is_descriptive() -> None:
@@ -2414,7 +2548,7 @@ def test_memory_archived_empty_state_mentions_archive_flow(tmp_path: Path) -> No
     text = app._memory_log_text()
     assert "No archived memory entries found." in text
     assert "z twice" in text
-    assert "press 5 to return to all entries" in text.lower()
+    assert "press 7 to return to all entries" in text.lower()
 
 
 def test_memory_restore_unarchives_selected_entry(tmp_path: Path) -> None:
