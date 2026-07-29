@@ -59,6 +59,9 @@ ailoop memory edit <memory-id> \
   --pause-seconds 10
 ```
 
+Config edits patch the latest saved snapshot. Fields omitted from the command keep
+their saved values; they are not reset to the current application defaults.
+
 Favorite or delete:
 
 ```bash
@@ -121,3 +124,6 @@ This keeps presets/history safer when you use `ailoop` across multiple repos.
 - `replay` creates a new loop from the saved entry
 - replay usage stats increase only after replay starts successfully
 - entries keep version snapshots when saved config changes through `memory edit`
+- metadata-only edits do not create config versions
+- memory updates use serialized atomic replacement so interrupted writes do not
+  expose partial JSON
