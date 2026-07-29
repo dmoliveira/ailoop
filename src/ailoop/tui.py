@@ -3233,41 +3233,42 @@ class LoopDashboard(App[None]):
 
         self._render_sidebar_stats(states, total_count=len(all_states))
         self._render_system_stats(states)
-        table.cursor_type = "row" if states else "none"
-        table.show_cursor = bool(states and selected_is_visible)
 
         self._rebuilding_loop_table = True
         try:
-            table.clear(columns=False)
-            for state in states:
-                target = state.run_config.steps
-                progress_count = effective_iteration_count(
-                    state.completed_iterations,
-                    state.current_iteration,
-                    state.status,
-                )
-                iteration_text = f"{progress_count}/{target or '∞'}"
-                icon = STATUS_ICONS.get(state.status, "•")
-                mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(state)
-                mode_label = {
-                    "fixed": "fixed",
-                    "infinite": "infinite",
-                    "scheduled": "scheduled",
-                }.get(mode, mode)
-                table.add_row(
-                    short_loop_id(state.loop_id),
-                    f"{icon} {short_status(state.status)}",
-                    iteration_text,
-                    mode_label,
-                    (state.run_config.agent or "-")[:12],
-                    key=state.loop_id,
-                )
+            with self.prevent(DataTable.RowHighlighted):
+                table.cursor_type = "row" if states else "none"
+                table.show_cursor = bool(states and selected_is_visible)
+                table.clear(columns=False)
+                for state in states:
+                    target = state.run_config.steps
+                    progress_count = effective_iteration_count(
+                        state.completed_iterations,
+                        state.current_iteration,
+                        state.status,
+                    )
+                    iteration_text = f"{progress_count}/{target or '∞'}"
+                    icon = STATUS_ICONS.get(state.status, "•")
+                    mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(state)
+                    mode_label = {
+                        "fixed": "fixed",
+                        "infinite": "infinite",
+                        "scheduled": "scheduled",
+                    }.get(mode, mode)
+                    table.add_row(
+                        short_loop_id(state.loop_id),
+                        f"{icon} {short_status(state.status)}",
+                        iteration_text,
+                        mode_label,
+                        (state.run_config.agent or "-")[:12],
+                        key=state.loop_id,
+                    )
 
-            if states and selected_is_visible:
-                try:
-                    table.move_cursor(row=table.get_row_index(self.selected_loop_id))
-                except Exception:
-                    pass
+                if states and selected_is_visible:
+                    try:
+                        table.move_cursor(row=table.get_row_index(self.selected_loop_id))
+                    except Exception:
+                        pass
         finally:
             self._rebuilding_loop_table = False
         self._sync_button_state(all_states)
