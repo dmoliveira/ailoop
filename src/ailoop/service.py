@@ -370,7 +370,7 @@ class LoopService:
             finalized = False
             try:
                 iteration = self._execute_iteration(claim, lifecycle)
-                state, events = self._finalize_iteration(claim, iteration)
+                state, events, deferred_error = self._finalize_iteration(claim, iteration)
                 finalized = True
             except BaseException as exc:
                 if not finalized:
@@ -379,6 +379,8 @@ class LoopService:
 
             try:
                 self._record_finalized_iteration(claim, iteration, state, events)
+                if deferred_error is not None:
+                    raise deferred_error
             except BaseException as exc:
                 self._fail_after_finalized_iteration(claim, exc)
                 raise
@@ -521,7 +523,8 @@ class LoopService:
         self,
         claim: IterationClaim,
         iteration: IterationRecord,
-    ) -> tuple[LoopState, list[dict[str, Any]]]:
+    ) -> tuple[LoopState, list[dict[str, Any]], BaseException | None]:
+        deferred_error: BaseException | None = None
         events: list[dict[str, Any]] = [
             {
                 "at": utc_now(),
@@ -556,23 +559,30 @@ class LoopService:
                 events.append({"at": utc_now(), "event": "paused"})
             elif iteration.exit_code not in (0, None) and not state.run_config.continue_on_error:
                 state.status = "failed"
-            elif claim.single_iteration_requested and self.should_continue(state):
-                state.status = "paused"
-                events.append(
-                    {
-                        "at": utc_now(),
-                        "event": "single_iteration_completed",
-                        "iteration": claim.number,
-                    }
-                )
-            elif not self.should_continue(state):
-                state.status = "completed"
-                if state.run_config.stop_when_tasks_complete and state.run_config.task_file:
-                    state.last_summary = state.last_summary or "task file complete"
-                events.append({"at": utc_now(), "event": "completed"})
             else:
-                state.status = "running"
-        return state, events
+                try:
+                    continue_running = self.should_continue(state)
+                except BaseException as exc:
+                    deferred_error = exc
+                    state.status = "failed"
+                else:
+                    if claim.single_iteration_requested and continue_running:
+                        state.status = "paused"
+                        events.append(
+                            {
+                                "at": utc_now(),
+                                "event": "single_iteration_completed",
+                                "iteration": claim.number,
+                            }
+                        )
+                    elif not continue_running:
+                        state.status = "completed"
+                        if state.run_config.stop_when_tasks_complete and state.run_config.task_file:
+                            state.last_summary = state.last_summary or "task file complete"
+                        events.append({"at": utc_now(), "event": "completed"})
+                    else:
+                        state.status = "running"
+        return state, events, deferred_error
 
     def _abort_iteration(
         self,
@@ -640,10 +650,7 @@ class LoopService:
         """Leave finalized accounting intact while clearing an orphaned active status."""
         try:
             with self.store.mutate(claim.state.loop_id) as state:
-                if (
-                    state.completed_iterations == claim.number
-                    and state.status in CLAIMED_STATUSES
-                ):
+                if state.completed_iterations == claim.number and state.status in CLAIMED_STATUSES:
                     if state.control == "stop":
                         state.status = "stopped"
                     elif state.control == "pause":

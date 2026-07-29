@@ -209,6 +209,120 @@ def test_pre_final_exception_is_recoverable_and_keeps_single_step_intent(
     assert resumed.pending_single_iteration is False
 
 
+def test_completed_iteration_survives_task_file_failure(tmp_path: Path) -> None:
+    task_file = tmp_path / "tasks.md"
+    valid_tasks = (
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n## Done\n- None\n"
+    )
+    task_file.write_text(valid_tasks, encoding="utf-8")
+    script = (
+        "import os; from pathlib import Path; "
+        f"p = Path(r'{task_file}'); "
+        "p.write_text('# broken\\n', encoding='utf-8') "
+        "if os.environ['AILOOP_ITERATION'] == '1' else None"
+    )
+    config = make_config(steps=2, runner_args=["-c", script])
+    (tmp_path / "workspace").mkdir()
+    config.task_file = str(task_file)
+    config.stop_when_tasks_complete = True
+    config.workspace_root = str(tmp_path / "workspace")
+    service = LoopService(tmp_path)
+    state = service.create_loop(config, loop_id="durable-task-accounting")
+    service.queue_follow_up(state.loop_id, "consume once")
+    service.request_single_iteration(state.loop_id)
+
+    with pytest.raises(ValueError, match="Unexpected content outside task sections"):
+        service.run_loop(state.loop_id)
+
+    failed = service.load_loop(state.loop_id)
+    assert failed.status == "failed"
+    assert failed.completed_iterations == 1
+    assert [item.number for item in failed.iterations] == [1]
+    assert failed.pending_single_iteration is False
+    assert failed.queued_follow_up is None
+    events = (tmp_path / state.loop_id / "events.jsonl").read_text(encoding="utf-8")
+    assert '"event": "iteration_aborted"' not in events
+    assert events.count('"event": "iteration_completed"') == 1
+    assert events.count('"event": "post_finalize_failed"') == 1
+    history = service.workspace_history.recent_entries(
+        config.workspace_root,
+        limit=10,
+        max_chars=10_000,
+    )
+    assert [entry.kind for entry in history] == ["prompt", "follow_up", "result"]
+    assert history[-1].iteration == 1
+
+    task_file.write_text(valid_tasks, encoding="utf-8")
+    resumed = service.resume_loop(state.loop_id)
+
+    assert resumed.status == "completed"
+    assert resumed.completed_iterations == 2
+    assert [item.number for item in resumed.iterations] == [1, 2]
+    assert resumed.pending_single_iteration is False
+    assert resumed.queued_follow_up is None
+
+
+@pytest.mark.parametrize("control", ["stop", "pause"])
+def test_control_precedes_post_run_task_file_failure(
+    control: str,
+    tmp_path: Path,
+) -> None:
+    task_file = tmp_path / "tasks.md"
+    task_file.write_text(
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n## Done\n- None\n",
+        encoding="utf-8",
+    )
+    config = make_config(steps=None)
+    config.task_file = str(task_file)
+    config.stop_when_tasks_complete = True
+    service = LoopService(tmp_path)
+    state = service.create_loop(config, loop_id=f"task-file-{control}")
+    original_run = service.runner.run
+
+    def run_and_control(**kwargs):  # type: ignore[no-untyped-def]
+        result = original_run(**kwargs)
+        task_file.write_text("# broken\n", encoding="utf-8")
+        service.request_control(state.loop_id, control)
+        return result
+
+    service.runner.run = run_and_control  # type: ignore[method-assign]
+    final = service.run_loop(state.loop_id)
+
+    assert final.status == ("stopped" if control == "stop" else "paused")
+    assert final.completed_iterations == 1
+    assert [item.number for item in final.iterations] == [1]
+
+
+def test_noncontinuable_failure_precedes_post_run_task_file_failure(
+    tmp_path: Path,
+) -> None:
+    task_file = tmp_path / "tasks.md"
+    task_file.write_text(
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n## Done\n- None\n",
+        encoding="utf-8",
+    )
+    script = (
+        "import sys; from pathlib import Path; "
+        f"Path(r'{task_file}').write_text('# broken\\n', encoding='utf-8'); "
+        "sys.exit(1)"
+    )
+    config = make_config(
+        steps=2,
+        continue_on_error=False,
+        runner_args=["-c", script],
+    )
+    config.task_file = str(task_file)
+    config.stop_when_tasks_complete = True
+    service = LoopService(tmp_path)
+    state = service.create_loop(config, loop_id="task-file-runner-failure")
+
+    final = service.run_loop(state.loop_id)
+
+    assert final.status == "failed"
+    assert final.completed_iterations == 1
+    assert [item.number for item in final.iterations] == [1]
+
+
 def test_unconfirmed_cleanup_is_fail_closed(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     state = service.create_loop(make_config(steps=None), loop_id="cleanup-blocked")
@@ -436,14 +550,13 @@ def test_parent_sigkill_leaves_loop_fail_closed_while_runner_survives(tmp_path: 
         "import sys; from pathlib import Path; from ailoop.service import LoopService; "
         "LoopService(Path(sys.argv[1])).run_loop(sys.argv[2])"
     )
-    parent = subprocess.Popen(
-        [sys.executable, "-c", parent_code, str(tmp_path), state.loop_id]
-    )
+    parent = subprocess.Popen([sys.executable, "-c", parent_code, str(tmp_path), state.loop_id])
     runner_pid: int | None = None
     try:
         wait_until(
-            lambda: runner_pid_file.exists()
-            and service.load_loop(state.loop_id).status == "running",
+            lambda: (
+                runner_pid_file.exists() and service.load_loop(state.loop_id).status == "running"
+            ),
             timeout=5,
         )
         runner_pid = int(runner_pid_file.read_text())
