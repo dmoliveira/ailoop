@@ -4635,6 +4635,8 @@ def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) 
             app.refresh_data()
             await pilot.pause()
             assert str(app.query_one("#workspace-current-branch").render()) == "branch-first"
+            table = app.query_one("#loops", DataTable)
+            assert table.get_row_index(first_state.loop_id) > 0
             config_prompt = app.query_one("#config-prompt", TextArea)
             config_prompt.text = "unsaved project draft"
             config_prompt.focus()
@@ -4643,6 +4645,13 @@ def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) 
             assert app.focused is app.query_one("#loops", DataTable)
             assert app.selected_loop_id == first_state.loop_id
             assert config_prompt.text == "unsaved project draft"
+            app.refresh_data()
+            await pilot.pause()
+            assert app.selected_loop_id == first_state.loop_id
+            assert config_prompt.text == "unsaved project draft"
+            assert str(app.query_one("#workspace-current-branch").render()) == "branch-first"
+            assert table.show_cursor is True
+            assert table.cursor_row == table.get_row_index(first_state.loop_id)
             await pilot.press("ctrl+j")
             await pilot.pause()
             assert app.selected_loop_id == second_state.loop_id
@@ -4655,6 +4664,13 @@ def test_switching_loops_refreshes_branch_for_visible_workspace(tmp_path: Path) 
             assert app.focused is app.query_one("#loops", DataTable)
             assert app.selected_loop_id == second_state.loop_id
             assert config_prompt.text == "another unsaved draft"
+            app.refresh_data()
+            await pilot.pause()
+            assert app.selected_loop_id == second_state.loop_id
+            assert config_prompt.text == "another unsaved draft"
+            assert str(app.query_one("#workspace-current-branch").render()) == "branch-second"
+            assert table.show_cursor is True
+            assert table.cursor_row == table.get_row_index(second_state.loop_id)
             await pilot.press("ctrl+k")
             await pilot.pause()
             assert app.selected_loop_id == first_state.loop_id
