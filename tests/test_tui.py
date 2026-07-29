@@ -274,6 +274,7 @@ def test_tui_preselect_switches_to_all_for_completed_loop(tmp_path: Path) -> Non
     )
     state = service.create_loop(run_config, loop_id="done-loop")
     service.run_loop(state.loop_id)
+
     async def run_test() -> None:
         app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser(), loop_id="done-loop")
         app.service = service
@@ -639,10 +640,7 @@ def test_summary_bar_text_compacts_at_80_columns(tmp_path: Path) -> None:
 def test_summary_bar_text_compacts_non_memory_mode_at_80_columns() -> None:
     app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
     text = app._summary_bar_text(0, 0, 0, 0, 0, 0, None, width=80)
-    assert (
-        text
-        == "sel none · f running · view stdout · L0 · A0 · R0 · P0 · S0 · F0"
-    )
+    assert text == "sel none · f running · view stdout · L0 · A0 · R0 · P0 · S0 · F0"
 
 
 def test_summary_bar_text_prioritizes_selected_loop_context() -> None:
@@ -874,7 +872,7 @@ def test_summary_selected_text_compacts_mode_and_next_run() -> None:
     assert "paused" in text
     assert "iter 2/5" in text
     assert "sched" in text
-    assert "next 6h" in text
+    assert "scheduler unavailable" in text
 
 
 def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults() -> None:
@@ -901,8 +899,8 @@ def test_summary_selected_text_prefers_selected_loop_schedule_over_form_defaults
 
     text = app._summary_selected_text(FakeState(), width=140)
 
-    assert "next 6h" in text
-    assert "next 1m" not in text
+    assert "scheduler unavailable" in text
+    assert "next" not in text
 
 
 def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
@@ -939,8 +937,8 @@ def test_loop_summary_uses_selected_loop_schedule_over_form_defaults() -> None:
     text = app._loop_summary_text(FakeState())
 
     assert "Mode: Scheduled" in text
-    assert "Next: in 6 hours" in text
-    assert "Next: in 1 minute" not in text
+    assert "Schedule: saved · scheduler unavailable" in text
+    assert "Next:" not in text
 
 
 def test_memory_help_text_does_not_require_selected_loop(tmp_path: Path) -> None:
@@ -2679,7 +2677,7 @@ def test_schedule_card_text_prefers_selected_loop_schedule_over_form_defaults() 
     assert "every 6" in text
     assert "start 09:30" in text
     assert "tz UTC" in text
-    assert "next 6h" in text
+    assert "saved · scheduler unavailable" in text
     assert "every 1" not in text
 
 
@@ -2783,8 +2781,8 @@ def test_actions_status_text_blocks_continue_for_scheduled_idle_loop(tmp_path: P
 
     text = app._actions_status_text(state)
 
-    assert text.startswith("scheduled-id · idle")
-    assert "continue waiting" in text
+    assert text.startswith("scheduled-id · saved configuration")
+    assert "scheduler unavailable" in text
     assert "continue ready" not in text
 
 
@@ -2906,7 +2904,7 @@ def test_action_resume_selected_blocks_scheduled_loop(tmp_path: Path) -> None:
 
     updated = service.load_loop(state.loop_id)
     assert updated.control == "run"
-    assert seen == {"message": "scheduled loops wait for their configured run window"}
+    assert seen == {"message": "scheduled configuration saved; automatic scheduling is unavailable"}
 
 
 def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -> None:
@@ -2951,10 +2949,52 @@ def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -
     assert len(loops) == 1
     assert loops[0].dashboard_config["mode"] == "scheduled"
     assert created == {
-        "message": f"scheduled loop saved: {loops[0].loop_id}",
+        "message": (f"scheduled configuration saved: {loops[0].loop_id}; scheduler unavailable"),
         "refreshed": "yes",
     }
     assert "spawned" not in created
+
+
+def test_action_save_schedule_warns_when_manual_iteration_is_pending(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-pending-save")
+    state.dashboard_config = {"mode": "scheduled"}
+    state.pending_single_iteration = True
+    persist_test_state(service, state)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+    app._config_mode_value = lambda: "scheduled"  # type: ignore[method-assign]
+    app._form_supports_run = lambda: True  # type: ignore[method-assign]
+    app._validate_workspace_root = lambda: True  # type: ignore[method-assign]
+    app._build_run_config_from_form = lambda _state=None: run_config  # type: ignore[method-assign]
+    app._dashboard_form_values = lambda: {"mode": "scheduled"}  # type: ignore[method-assign]
+    app._workspace_form_values = lambda: {}  # type: ignore[method-assign]
+    spawned: list[str] = []
+    messages: list[str] = []
+    app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+    app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+
+    app.action_run_loop()
+
+    assert spawned == []
+    assert messages == ["Cannot save scheduled mode while a manual iteration is pending"]
+    assert service.load_loop(state.loop_id).pending_single_iteration is True
 
 
 def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> None:
@@ -2997,7 +3037,9 @@ def test_loop_summary_uses_saved_scheduled_mode_and_scope(tmp_path: Path) -> Non
 
     assert "Mode: Scheduled" in text
     assert "Mode: Scheduled · every 6 hours" in text
-    assert "Next: in 6 hours · branch per iteration · Level 4 Edit + Commit" in text
+    assert (
+        "Schedule: saved · scheduler unavailable · branch per iteration · Level 4 Edit + Commit"
+    ) in text
     assert "Scope: /tmp/scheduled-workspace · branch" in text
 
 
@@ -3313,6 +3355,43 @@ def test_ops_snapshot_text_compacts_to_two_summary_lines() -> None:
     assert "ch on/off/off" in lines[2]
 
 
+def test_ops_snapshot_does_not_claim_countdown_for_scheduled_config() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+
+    class FakeState:
+        dashboard_config = {"mode": "scheduled"}
+
+    class FakeWidget:
+        def __init__(self, value: str | bool) -> None:
+            self.value = value
+
+    widgets = {
+        "#safety-autonomy": FakeWidget("level-3"),
+        "#workspace-branch-strategy": FakeWidget("current"),
+        "#safety-ask-before-commit": FakeWidget(True),
+        "#safety-ask-before-push": FakeWidget(True),
+        "#safety-auto-commit": FakeWidget(False),
+        "#safety-auto-push": FakeWidget(False),
+        "#safety-max-runtime": FakeWidget("4h"),
+        "#safety-max-files-changed": FakeWidget("100"),
+        "#safety-max-commits": FakeWidget("10"),
+        "#notify-start": FakeWidget(True),
+        "#notify-success": FakeWidget(True),
+        "#notify-failure": FakeWidget(True),
+        "#notify-limit": FakeWidget(True),
+        "#notify-complete": FakeWidget(True),
+        "#notify-terminal": FakeWidget(True),
+        "#notify-slack": FakeWidget(False),
+        "#notify-email": FakeWidget(False),
+    }
+    app.query_one = lambda selector, *_args, **_kwargs: widgets[selector]  # type: ignore[method-assign]
+
+    text = app._ops_snapshot_text(FakeState())
+
+    assert "Sched saved · scheduler unavailable" in text
+    assert "next" not in text.lower()
+
+
 def test_loop_summary_text_compacts_metadata_lines(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -3506,9 +3585,7 @@ def test_invalid_workspace_root_is_not_saved_or_started(tmp_path: Path) -> None:
             app.action_run_loop()
             await pilot.pause()
             assert service.list_loops() == []
-            assert messages == [
-                f"workspace root must be an existing directory: {invalid_root}"
-            ]
+            assert messages == [f"workspace root must be an existing directory: {invalid_root}"]
 
     import asyncio
 
@@ -3640,6 +3717,104 @@ def test_follow_up_shortcut_requires_follow_up_focus_and_accepts_ctrl_g(tmp_path
     import asyncio
 
     asyncio.run(run_test())
+
+
+def test_scheduled_tui_disables_manual_execution_and_labels_saved_actions(
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-capabilities")
+    state.dashboard_config = {
+        "mode": "scheduled",
+        "schedule_type": "hours",
+        "schedule_every": "1",
+    }
+    persist_test_state(service, state)
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(),
+            loop_id=state.loop_id,
+        )
+        app.service = service
+        async with app.run_test() as pilot:
+            app.refresh_data()
+            await pilot.pause()
+            for selector in (
+                "#pause",
+                "#start-continue",
+                "#stop",
+                "#restart",
+                "#restart-reset",
+                "#next-iteration",
+            ):
+                assert app.query_one(selector).disabled is True
+            assert str(app.query_one("#run-loop").label) == "Save Schedule"
+            assert str(app.query_one("#queue-follow-up").label) == ("Queue Follow-up (saved only)")
+            before = service.load_loop(state.loop_id).to_dict()
+            app.action_pause_selected()
+            app.action_stop_selected()
+            assert service.load_loop(state.loop_id).to_dict() == before
+            help_text = str(app.query_one("#help_bar").render())
+            assert "scheduler unavailable" in help_text
+            assert "continue" not in help_text
+            assert "next iteration" not in help_text
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_disabled_pause_and_stop_shortcuts_do_not_mutate_idle_loop(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(
+        LoopRunConfig(
+            prompt="hello",
+            runner="echo",
+            agent="orchestrator",
+            steps=2,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=["-c", "print('ok')"],
+        ),
+        loop_id="idle-shortcuts",
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+    messages: list[str] = []
+    app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+
+    before = service.load_loop(state.loop_id).to_dict()
+    app.action_pause_selected()
+    app.action_stop_selected()
+
+    assert service.load_loop(state.loop_id).to_dict() == before
+    assert messages == [
+        "pause is not available for this loop",
+        "stop is not available for this loop",
+    ]
 
 
 def test_recent_workspace_picker_updates_root(tmp_path: Path) -> None:

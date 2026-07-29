@@ -37,6 +37,7 @@ def test_loop_runs_and_persists_state(tmp_path: Path) -> None:
     loaded = service.load_loop("loop1")
     assert loaded.completed_iterations == 2
 
+
 def test_pause_request_is_recorded(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -269,7 +270,7 @@ def test_run_loop_keeps_scheduled_loops_idle(tmp_path: Path) -> None:
     assert final_state.completed_iterations == 0
 
 
-def test_scheduled_loop_preserves_pre_start_pause_request(tmp_path: Path) -> None:
+def test_scheduled_loop_rejects_inactive_pause_request(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
         prompt="hello",
@@ -293,15 +294,13 @@ def test_scheduled_loop_preserves_pre_start_pause_request(tmp_path: Path) -> Non
             "schedule_type": "hours",
             "schedule_every": "1",
         }
-    service.request_control(state.loop_id, "pause")
-
-    final_state = service.run_loop(state.loop_id)
-
-    assert final_state.status == "paused"
-    assert final_state.completed_iterations == 0
+    before = service.load_loop(state.loop_id).to_dict()
+    with pytest.raises(RuntimeError, match="saved configurations"):
+        service.request_control(state.loop_id, "pause")
+    assert service.load_loop(state.loop_id).to_dict() == before
 
 
-def test_scheduled_loop_preserves_pre_start_stop_request(tmp_path: Path) -> None:
+def test_scheduled_loop_rejects_inactive_stop_request(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
         prompt="hello",
@@ -325,12 +324,89 @@ def test_scheduled_loop_preserves_pre_start_stop_request(tmp_path: Path) -> None
             "schedule_type": "hours",
             "schedule_every": "1",
         }
-    service.request_control(state.loop_id, "stop")
+    before = service.load_loop(state.loop_id).to_dict()
+    with pytest.raises(RuntimeError, match="saved configurations"):
+        service.request_control(state.loop_id, "stop")
+    assert service.load_loop(state.loop_id).to_dict() == before
 
-    final_state = service.run_loop(state.loop_id)
 
-    assert final_state.status == "stopped"
-    assert final_state.completed_iterations == 0
+def test_scheduled_loop_allows_emergency_stop_for_claimed_process(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-emergency-stop")
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.dashboard_config = {"mode": "scheduled"}
+        persisted.status = "running"
+
+    before = service.load_loop(state.loop_id).to_dict()
+    with pytest.raises(RuntimeError, match="saved configurations"):
+        service.request_control(state.loop_id, "pause")
+    assert service.load_loop(state.loop_id).to_dict() == before
+
+    stopped = service.request_control(state.loop_id, "stop")
+
+    assert stopped.status == "stop_requested"
+    assert stopped.control == "stop"
+
+
+def test_saving_scheduled_mode_normalizes_control_and_rejects_pending_work(
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent=None,
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="scheduled-normalized")
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.status = "stopped"
+        persisted.control = "stop"
+
+    saved = service.update_loop_config(
+        state.loop_id,
+        run_config,
+        {"mode": "scheduled"},
+        {},
+    )
+    assert saved.status == "idle"
+    assert saved.control == "run"
+
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.pending_single_iteration = True
+    before = service.load_loop(state.loop_id).to_dict()
+    with pytest.raises(RuntimeError, match="manual iteration is pending"):
+        service.update_loop_config(
+            state.loop_id,
+            run_config,
+            {"mode": "scheduled"},
+            {},
+        )
+    assert service.load_loop(state.loop_id).to_dict() == before
 
 
 def test_list_loops_returns_saved_states(tmp_path: Path) -> None:
