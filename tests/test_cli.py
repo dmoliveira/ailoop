@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -19,7 +22,7 @@ default_runner: test
 default_agent: orchestrator
 paths:
   agent_file: null
-  state_dir: {tmp_path / 'state'}
+  state_dir: {tmp_path / "state"}
 prompt:
   pre_prompt_enabled: false
   attach_agent_file: false
@@ -132,7 +135,7 @@ default_runner: test
 default_agent: orchestrator
 paths:
   agent_file: null
-  state_dir: {tmp_path / 'state'}
+  state_dir: {tmp_path / "state"}
 prompt:
   pre_prompt_enabled: false
   attach_agent_file: false
@@ -251,6 +254,313 @@ def test_memory_save_list_show_and_edit(capsys, monkeypatch, tmp_path: Path) -> 
     listed_text = capsys.readouterr().out
     assert "Used" in listed_text
     assert "Labels" in listed_text
+
+
+def test_memory_edit_patches_latest_snapshot_without_defaults(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    memory = MemoryStore(tmp_path / "state")
+    original = memory.create(
+        kind="preset",
+        title="Patch me",
+        folder=tmp_path,
+        run_config=LoopRunConfig(
+            prompt="original prompt",
+            runner="test",
+            agent=None,
+            steps=7,
+            pause_seconds=9,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=True,
+            attach_agent_file=True,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=["-c", "print('ok')"],
+            task_file=None,
+            stop_when_tasks_complete=False,
+            workspace_root=None,
+            workspace_history_enabled=False,
+            workspace_history_limit=13,
+            workspace_history_chars=2400,
+        ),
+        token_ref="token-1",
+    )
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "edit",
+            original.id,
+            "--prompt",
+            "patched prompt",
+        ],
+    )
+    main()
+    first = json.loads(capsys.readouterr().out)
+
+    assert first["latest_version"] == 2
+    assert first["versions"][0]["prompt"] == "original prompt"
+    assert first["current"] == first["versions"][-1]
+    assert first["current"]["prompt"] == "patched prompt"
+    assert first["token_ref"] == first["current"]["token_ref"] == "token-1"
+    for field in (
+        "runner",
+        "agent",
+        "steps",
+        "pause_seconds",
+        "task_file",
+        "until_tasks_complete",
+        "no_pre_prompt",
+        "no_agent_file",
+        "agent_file",
+        "workspace_root",
+        "workspace_history_enabled",
+        "workspace_history_limit",
+        "workspace_history_chars",
+        "token_ref",
+    ):
+        assert first["current"][field] == first["versions"][0][field]
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "edit",
+            original.id,
+            "--steps",
+            "3",
+        ],
+    )
+    main()
+    second = json.loads(capsys.readouterr().out)
+    assert second["latest_version"] == 3
+    assert [item["version"] for item in second["versions"]] == [1, 2, 3]
+    assert second["current"]["prompt"] == "patched prompt"
+    assert second["current"]["steps"] == 3
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "edit",
+            original.id,
+            "--title",
+            "Metadata only",
+        ],
+    )
+    main()
+    metadata = json.loads(capsys.readouterr().out)
+    assert metadata["latest_version"] == 3
+    assert len(metadata["versions"]) == 3
+
+    path = tmp_path / "state" / "memory" / "presets" / f"{original.id}.json"
+    before_invalid_edit = path.read_bytes()
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "edit",
+            original.id,
+            "--runner",
+            "missing",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        main()
+    assert exc.value.code == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+    assert path.read_bytes() == before_invalid_edit
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "ailoop",
+            "--json",
+            "--config",
+            str(config_path),
+            "memory",
+            "edit",
+            original.id,
+        ],
+    )
+    with pytest.raises(SystemExit) as empty_exc:
+        main()
+    assert empty_exc.value.code == 1
+    assert "No memory changes requested" in capsys.readouterr().out
+    assert path.read_bytes() == before_invalid_edit
+
+
+def test_memory_edit_failure_preserves_original_bytes(monkeypatch, tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    entry = memory.create(
+        kind="preset",
+        title="Atomic",
+        folder=tmp_path,
+        run_config=LoopRunConfig(
+            prompt="before",
+            runner="test",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=[],
+        ),
+    )
+    path = tmp_path / "memory" / "presets" / f"{entry.id}.json"
+    original = path.read_bytes()
+
+    def fail_replace(*_args) -> None:  # type: ignore[no-untyped-def]
+        raise OSError("fail")
+
+    monkeypatch.setattr("ailoop.memory.os.replace", fail_replace)
+
+    with pytest.raises(OSError, match="fail"):
+        memory.edit(entry.id, snapshot_updates={"prompt": "after"}, folder=tmp_path)
+
+    assert path.read_bytes() == original
+    assert list(path.parent.glob(f".{path.name}.*.tmp")) == []
+
+
+def test_memory_postcommit_directory_fsync_failure_does_not_invite_retry(
+    monkeypatch, tmp_path: Path
+) -> None:
+    memory = MemoryStore(tmp_path)
+    entry = memory.create(
+        kind="preset",
+        title="Committed",
+        folder=tmp_path,
+        run_config=LoopRunConfig(
+            prompt="before",
+            runner="test",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=[],
+        ),
+    )
+    original_fsync = os.fsync
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("directory fsync unavailable")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr("ailoop.memory.os.fsync", fail_directory_fsync)
+
+    updated = memory.edit(
+        entry.id,
+        snapshot_updates={"prompt": "after"},
+        folder=tmp_path,
+    )
+
+    assert updated.latest_version == 2
+    assert memory.load(entry.id, folder=tmp_path).current.prompt == "after"
+
+
+def test_concurrent_memory_usage_updates_are_serialized(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    entry = memory.create(
+        kind="preset",
+        title="Usage",
+        folder=tmp_path,
+        run_config=LoopRunConfig(
+            prompt="count",
+            runner="test",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=[],
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(lambda _: memory.mark_used(entry.id, folder=tmp_path), range(20)))
+
+    assert memory.load(entry.id, folder=tmp_path).use_count == 20
+
+
+def test_concurrent_disjoint_memory_patches_both_survive(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    entry = memory.create(
+        kind="preset",
+        title="Patches",
+        folder=tmp_path,
+        run_config=LoopRunConfig(
+            prompt="before",
+            runner="test",
+            agent=None,
+            steps=1,
+            pause_seconds=0,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=[],
+        ),
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(
+                memory.edit,
+                entry.id,
+                snapshot_updates=updates,
+                folder=tmp_path,
+            )
+            for updates in ({"prompt": "after"}, {"steps": 4})
+        ]
+        for future in futures:
+            future.result()
+
+    updated = memory.load(entry.id, folder=tmp_path)
+    assert updated.current.prompt == "after"
+    assert updated.current.steps == 4
+    assert updated.latest_version == 3
+    assert [snapshot.version for snapshot in updated.versions] == [1, 2, 3]
 
 
 def test_memory_list_skips_corrupt_entries(capsys, monkeypatch, tmp_path: Path) -> None:
@@ -843,7 +1153,6 @@ def test_replay_failure_does_not_mark_used(capsys, monkeypatch, tmp_path: Path) 
     store = MemoryStore(tmp_path / "state")
     entry = store.load(entry_id)
     assert entry.use_count == 0
-
 
 
 def test_check_task_file_verbose(capsys, monkeypatch, tmp_path: Path) -> None:

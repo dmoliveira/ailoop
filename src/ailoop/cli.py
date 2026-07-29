@@ -7,8 +7,14 @@ import sys
 from pathlib import Path
 
 from .config import default_config_path, init_config_text, load_app_config, resolve_run_config
-from .memory import MemoryStore, render_memory_list, render_memory_show, run_config_from_entry
-from .paths import ensure_dir, read_last_lines
+from .memory import (
+    MemoryStore,
+    VersionSnapshot,
+    render_memory_list,
+    render_memory_show,
+    run_config_from_entry,
+)
+from .paths import ensure_dir, expand_path, read_last_lines
 from .service import LoopService
 from .stats import get_color_mode, render_loop_list, render_stats, render_status, set_color_mode
 from .tasks import (
@@ -162,10 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Start a new loop. By default it runs forever unless --steps is set.\n\n"
             "Examples:\n"
-            "  ailoop run \"Review the repo\" --runner opencode --agent orchestrator\n"
-            "  ailoop run \"Do 5 iterations\" --steps 5\n"
+            '  ailoop run "Review the repo" --runner opencode --agent orchestrator\n'
+            '  ailoop run "Do 5 iterations" --steps 5\n'
             "  ailoop task-template > loop_tasks.md\n"
-            "  ailoop run \"Work tasks\" --task-file ./loop_tasks.md --until-tasks-complete"
+            '  ailoop run "Work tasks" --task-file ./loop_tasks.md --until-tasks-complete'
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -530,8 +536,7 @@ def build_parser() -> argparse.ArgumentParser:
         "remove",
         help="Delete a saved loop",
         description=(
-            "Delete saved state and logs for one loop. "
-            "Locked/running loops cannot be removed."
+            "Delete saved state and logs for one loop. Locked/running loops cannot be removed."
         ),
     )
     remove_parser.add_argument("loop_id", help="Loop id to delete")
@@ -593,6 +598,51 @@ def _resolve_memory_run_config(args: argparse.Namespace, app_config) -> object:
         task_file=args.task_file,
         stop_when_tasks_complete=True if getattr(args, "until_tasks_complete", False) else None,
         workspace_root=getattr(args, "workspace_root", None),
+    )
+
+
+def _memory_snapshot_updates(args: argparse.Namespace) -> dict[str, object]:
+    updates = {
+        field: value
+        for field, value in (
+            ("prompt", args.prompt),
+            ("runner", args.runner),
+            ("agent", args.agent),
+            ("steps", args.steps),
+            ("pause_seconds", args.pause_seconds),
+            ("agent_file", args.agent_file),
+            ("task_file", args.task_file),
+        )
+        if value is not None
+    }
+    if args.task_file is not None:
+        updates["task_file"] = str(expand_path(args.task_file))
+    if args.no_pre_prompt:
+        updates["no_pre_prompt"] = True
+    if args.no_agent_file:
+        updates["no_agent_file"] = True
+    if args.until_tasks_complete:
+        updates["until_tasks_complete"] = True
+    return updates
+
+
+def _validate_memory_snapshot(snapshot: VersionSnapshot, app_config) -> None:
+    resolve_run_config(
+        app_config,
+        prompt=snapshot.prompt,
+        runner=snapshot.runner,
+        agent=snapshot.agent,
+        steps=snapshot.steps,
+        pause_seconds=snapshot.pause_seconds,
+        pre_prompt_enabled=not snapshot.no_pre_prompt,
+        attach_agent_file=not snapshot.no_agent_file,
+        agent_file=snapshot.agent_file,
+        task_file=snapshot.task_file,
+        stop_when_tasks_complete=snapshot.until_tasks_complete,
+        workspace_root=snapshot.workspace_root,
+        workspace_history_enabled=snapshot.workspace_history_enabled,
+        workspace_history_limit=snapshot.workspace_history_limit,
+        workspace_history_chars=snapshot.workspace_history_chars,
     )
 
 
@@ -727,24 +777,13 @@ def main() -> None:
                 return
 
             if args.memory_command == "edit":
-                updates_requested = any(
-                    value is not None
-                    for value in (
-                        args.prompt,
-                        args.runner,
-                        args.agent,
-                        args.steps,
-                        args.pause_seconds,
-                        args.agent_file,
-                        args.task_file,
-                    )
-                ) or args.no_pre_prompt or args.no_agent_file or args.until_tasks_complete
-                run_config = (
-                    _resolve_memory_run_config(args, app_config) if updates_requested else None
-                )
+                snapshot_updates = _memory_snapshot_updates(args)
                 entry = memory.edit(
                     args.entry_id,
-                    run_config=run_config,
+                    snapshot_updates=snapshot_updates or None,
+                    snapshot_validator=(
+                        lambda snapshot: _validate_memory_snapshot(snapshot, app_config)
+                    ),
                     title=args.title,
                     labels=args.label,
                     favorite=args.favorite,
@@ -795,9 +834,7 @@ def main() -> None:
 
         if args.command == "resume":
             final_state = (
-                service.run_loop(args.loop_id)
-                if args.worker
-                else service.resume_loop(args.loop_id)
+                service.run_loop(args.loop_id) if args.worker else service.resume_loop(args.loop_id)
             )
             if args.json:
                 print_json(final_state.to_dict())

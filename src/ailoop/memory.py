@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+import fcntl
 import getpass
 import hashlib
 import json
+import os
+import tempfile
 import uuid
-from dataclasses import asdict, dataclass, field, fields
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from copy import deepcopy
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -13,6 +19,26 @@ from .models import AppConfig, LoopRunConfig, utc_now
 from .paths import ensure_dir
 
 MemoryKind = Literal["preset", "history"]
+
+EDITABLE_SNAPSHOT_FIELDS = frozenset(
+    {
+        "prompt",
+        "runner",
+        "agent",
+        "steps",
+        "pause_seconds",
+        "task_file",
+        "until_tasks_complete",
+        "no_pre_prompt",
+        "no_agent_file",
+        "agent_file",
+        "workspace_root",
+        "workspace_history_enabled",
+        "workspace_history_limit",
+        "workspace_history_chars",
+        "extra_args",
+    }
+)
 
 
 def _known_fields(cls: type, data: dict[str, Any]) -> dict[str, Any]:
@@ -58,6 +84,9 @@ class VersionSnapshot:
         return asdict(self)
 
 
+SnapshotValidator = Callable[[VersionSnapshot], None]
+
+
 @dataclass(slots=True)
 class MemoryEntry:
     id: str
@@ -91,8 +120,7 @@ class MemoryEntry:
         scope = MemoryScope(**_known_fields(MemoryScope, data["scope"]))
         current = VersionSnapshot(**_known_fields(VersionSnapshot, data["current"]))
         versions = [
-            VersionSnapshot(**_known_fields(VersionSnapshot, item))
-            for item in data["versions"]
+            VersionSnapshot(**_known_fields(VersionSnapshot, item)) for item in data["versions"]
         ]
         return cls(
             id=data["id"],
@@ -175,6 +203,7 @@ class MemoryStore:
         self.root = ensure_dir(state_root / "memory")
         self.presets_dir = ensure_dir(self.root / "presets")
         self.history_dir = ensure_dir(self.root / "history")
+        self.locks_dir = ensure_dir(self.root / "locks")
 
     def _kind_dir(self, kind: MemoryKind) -> Path:
         return self.presets_dir if kind == "preset" else self.history_dir
@@ -182,8 +211,54 @@ class MemoryStore:
     def _entry_path(self, kind: MemoryKind, entry_id: str) -> Path:
         return self._kind_dir(kind) / f"{entry_id}.json"
 
+    @contextmanager
+    def _entry_lock(self, entry_id: str) -> Iterator[None]:
+        lock_path = self.locks_dir / f"{entry_id}.lock"
+        with lock_path.open("a", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _write_unlocked(self, entry: MemoryEntry) -> None:
+        path = self._entry_path(entry.kind, entry.id)
+        payload = json.dumps(entry.to_dict(), indent=2)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+        )
+        temporary_path = Path(temporary_name)
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                descriptor = -1
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary_path, path)
+            self._fsync_directory(path.parent)
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        try:
+            directory = os.open(path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            try:
+                os.fsync(directory)
+            except OSError:
+                pass
+        finally:
+            os.close(directory)
+
     def save(self, entry: MemoryEntry) -> None:
-        self._entry_path(entry.kind, entry.id).write_text(json.dumps(entry.to_dict(), indent=2))
+        with self._entry_lock(entry.id):
+            self._write_unlocked(entry)
 
     def _authorize(
         self,
@@ -305,8 +380,8 @@ class MemoryStore:
             source_loop_id=source_loop_id,
             source_command=source_command,
             latest_version=1,
-            current=snapshot,
-            versions=[snapshot],
+            current=deepcopy(snapshot),
+            versions=[deepcopy(snapshot)],
         )
         self.save(entry)
         return entry
@@ -316,6 +391,8 @@ class MemoryStore:
         entry_id: str,
         *,
         run_config: LoopRunConfig | None = None,
+        snapshot_updates: Mapping[str, object] | None = None,
+        snapshot_validator: SnapshotValidator | None = None,
         title: str | None = None,
         labels: list[str] | None = None,
         favorite: bool | None = None,
@@ -326,32 +403,72 @@ class MemoryStore:
         user_id: str | None = None,
         all_folders: bool = False,
     ) -> MemoryEntry:
-        entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
-        actual_user = user_id or current_user_id()
-        entry.updated_at = utc_now()
-        entry.updated_by = actual_user
-        if title is not None:
-            entry.title = title
-        if labels is not None:
-            entry.labels = labels
-        if favorite is not None:
-            entry.favorite = favorite
-        if archived is not None:
-            entry.archived = archived
-        if run_config is not None:
-            version = entry.latest_version + 1
-            snapshot = snapshot_from_run_config(
-                run_config,
-                version=version,
-                saved_by=actual_user,
-                token_ref=token_ref,
-                change_note=change_note,
+        if run_config is not None and snapshot_updates is not None:
+            raise ValueError("run_config and snapshot_updates are mutually exclusive")
+        updates = dict(snapshot_updates or {})
+        unknown = set(updates) - EDITABLE_SNAPSHOT_FIELDS
+        if unknown:
+            raise ValueError(f"Unsupported memory snapshot fields: {', '.join(sorted(unknown))}")
+        if change_note is not None and run_config is None and not updates:
+            raise ValueError("change_note requires a saved configuration change")
+        if (
+            run_config is None
+            and not updates
+            and title is None
+            and labels is None
+            and favorite is None
+            and archived is None
+        ):
+            raise ValueError("No memory changes requested")
+
+        with self._entry_lock(entry_id):
+            entry = self.load(
+                entry_id,
+                folder=folder,
+                user_id=user_id,
+                all_folders=all_folders,
             )
-            entry.latest_version = version
-            entry.current = snapshot
-            entry.versions.append(snapshot)
-        self.save(entry)
-        return entry
+            actual_user = user_id or current_user_id()
+            entry.updated_at = utc_now()
+            entry.updated_by = actual_user
+            if title is not None:
+                entry.title = title
+            if labels is not None:
+                entry.labels = labels
+            if favorite is not None:
+                entry.favorite = favorite
+            if archived is not None:
+                entry.archived = archived
+            if run_config is not None or updates:
+                version = entry.latest_version + 1
+                if run_config is not None:
+                    snapshot = snapshot_from_run_config(
+                        run_config,
+                        version=version,
+                        saved_by=actual_user,
+                        token_ref=token_ref,
+                        change_note=change_note,
+                    )
+                else:
+                    if "extra_args" in updates:
+                        updates["extra_args"] = list(updates["extra_args"])  # type: ignore[arg-type]
+                    snapshot = replace(
+                        deepcopy(entry.current),
+                        **updates,
+                        version=version,
+                        saved_at=utc_now(),
+                        saved_by=actual_user,
+                        token_ref=(entry.current.token_ref if token_ref is None else token_ref),
+                        change_note=change_note,
+                    )
+                if snapshot_validator is not None:
+                    snapshot_validator(snapshot)
+                entry.token_ref = snapshot.token_ref
+                entry.latest_version = version
+                entry.current = deepcopy(snapshot)
+                entry.versions.append(deepcopy(snapshot))
+            self._write_unlocked(entry)
+            return entry
 
     def delete(
         self,
@@ -361,8 +478,11 @@ class MemoryStore:
         user_id: str | None = None,
         all_folders: bool = False,
     ) -> None:
-        entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
-        self._entry_path(entry.kind, entry.id).unlink(missing_ok=True)
+        with self._entry_lock(entry_id):
+            entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
+            path = self._entry_path(entry.kind, entry.id)
+            path.unlink(missing_ok=True)
+            self._fsync_directory(path.parent)
 
     def mark_used(
         self,
@@ -372,11 +492,12 @@ class MemoryStore:
         user_id: str | None = None,
         all_folders: bool = False,
     ) -> MemoryEntry:
-        entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
-        entry.use_count += 1
-        entry.last_used_at = utc_now()
-        self.save(entry)
-        return entry
+        with self._entry_lock(entry_id):
+            entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
+            entry.use_count += 1
+            entry.last_used_at = utc_now()
+            self._write_unlocked(entry)
+            return entry
 
 
 def render_memory_list(entries: list[MemoryEntry], *, all_folders: bool = False) -> str:
