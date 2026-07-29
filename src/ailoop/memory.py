@@ -24,6 +24,15 @@ MemoryKind = Literal["preset", "history"]
 MEMORY_ID_PATTERN = re.compile(r"^[0-9a-f]{12}$")
 MAX_MEMORY_ID_ATTEMPTS = 32
 
+
+class MemoryStorageError(OSError):
+    """A filesystem failure while accessing memory storage."""
+
+
+class MemoryIntegrityError(ValueError):
+    """Unsafe or ambiguous memory state that must not be modified."""
+
+
 EDITABLE_SNAPSHOT_FIELDS = frozenset(
     {
         "prompt",
@@ -212,12 +221,17 @@ class MemoryStore:
     @staticmethod
     def _ensure_storage_directory(path: Path) -> Path:
         try:
-            observed = path.lstat()
-        except FileNotFoundError:
-            ensure_dir(path)
-            observed = path.lstat()
+            try:
+                observed = path.lstat()
+            except FileNotFoundError:
+                ensure_dir(path)
+                observed = path.lstat()
+        except OSError as exc:
+            raise MemoryStorageError(
+                f"Unable to prepare memory storage directory {path}: {exc}"
+            ) from exc
         if not stat.S_ISDIR(observed.st_mode):
-            raise RuntimeError(f"Memory storage path is not a real directory: {path}")
+            raise MemoryIntegrityError(f"Memory storage path is not a real directory: {path}")
         return path
 
     def _kind_dir(self, kind: MemoryKind) -> Path:
@@ -238,26 +252,50 @@ class MemoryStore:
         lock_path = self.locks_dir / f"{entry_id}.lock"
         no_follow = getattr(os, "O_NOFOLLOW", None)
         if no_follow is None:
-            raise RuntimeError("Secure no-follow memory locking is unavailable")
-        descriptor = os.open(
-            lock_path,
-            os.O_RDWR | os.O_CREAT | no_follow | getattr(os, "O_CLOEXEC", 0),
-            0o600,
-        )
+            raise MemoryIntegrityError("Secure no-follow memory locking is unavailable")
         try:
-            observed = os.fstat(descriptor)
-            if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
-                raise RuntimeError(f"Memory entry lock is not a regular file: {entry_id}")
-            if hasattr(os, "getuid") and observed.st_uid != os.getuid():
-                raise RuntimeError(f"Memory entry lock has an unexpected owner: {entry_id}")
-            os.fchmod(descriptor, 0o600)
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            descriptor = os.open(
+                lock_path,
+                os.O_RDWR | os.O_CREAT | no_follow | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+            )
+        except OSError as exc:
+            raise MemoryStorageError(f"Unable to open memory entry lock {entry_id}: {exc}") from exc
+        locked = False
+        try:
             try:
-                yield
-            finally:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                observed = os.fstat(descriptor)
+            except OSError as exc:
+                raise MemoryStorageError(
+                    f"Unable to inspect memory entry lock {entry_id}: {exc}"
+                ) from exc
+            if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
+                raise MemoryIntegrityError(
+                    f"Memory entry lock is not a private regular file: {entry_id}"
+                )
+            if hasattr(os, "getuid") and observed.st_uid != os.getuid():
+                raise MemoryIntegrityError(f"Memory entry lock has an unexpected owner: {entry_id}")
+            try:
+                os.fchmod(descriptor, 0o600)
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                locked = True
+            except OSError as exc:
+                raise MemoryStorageError(
+                    f"Unable to acquire memory entry lock {entry_id}: {exc}"
+                ) from exc
+            yield
         finally:
-            os.close(descriptor)
+            # Lock cleanup happens after a mutation may already have committed. Never turn
+            # successful publication into an ambiguous failure at this point.
+            if locked:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_UN)
+                except OSError:
+                    pass
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
     @staticmethod
     def _path_occupied(path: Path) -> bool:
@@ -265,13 +303,47 @@ class MemoryStore:
             path.lstat()
         except FileNotFoundError:
             return False
+        except OSError as exc:
+            raise MemoryStorageError(
+                f"Unable to inspect memory entry path {path.name}: {exc}"
+            ) from exc
         return True
+
+    @staticmethod
+    def _prepare_entry_links(
+        path: Path, descriptor: int, observed: os.stat_result
+    ) -> os.stat_result:
+        if observed.st_nlink == 1:
+            return observed
+
+        try:
+            for candidate in path.parent.glob(f".{path.name}.*.tmp"):
+                try:
+                    candidate_stat = candidate.lstat()
+                except FileNotFoundError:
+                    continue
+                if (candidate_stat.st_dev, candidate_stat.st_ino) == (
+                    observed.st_dev,
+                    observed.st_ino,
+                ):
+                    candidate.unlink(missing_ok=True)
+            current = os.fstat(descriptor)
+        except OSError as exc:
+            raise MemoryStorageError(
+                f"Unable to clean memory entry staging links {path.name}: {exc}"
+            ) from exc
+
+        # Reads run under the per-ID lock. A failed publication cleanup can
+        # therefore be retried before strictly rejecting any unaccounted link.
+        if current.st_nlink != 1:
+            raise MemoryIntegrityError(f"Memory entry is not a private regular file: {path.name}")
+        return current
 
     @staticmethod
     def _read_entry_bytes(path: Path) -> bytes:
         no_follow = getattr(os, "O_NOFOLLOW", None)
         if no_follow is None:
-            raise RuntimeError("Secure no-follow memory reads are unavailable")
+            raise MemoryIntegrityError("Secure no-follow memory reads are unavailable")
         try:
             descriptor = os.open(
                 path,
@@ -280,28 +352,45 @@ class MemoryStore:
         except FileNotFoundError:
             raise
         except OSError as exc:
-            raise ValueError(f"Memory entry path is unsafe: {path.name}") from exc
+            raise MemoryIntegrityError(f"Memory entry path is unsafe: {path.name}") from exc
         try:
-            observed = os.fstat(descriptor)
-            if not stat.S_ISREG(observed.st_mode) or observed.st_nlink != 1:
-                raise ValueError(f"Memory entry is not a private regular file: {path.name}")
+            try:
+                observed = os.fstat(descriptor)
+            except OSError as exc:
+                raise MemoryStorageError(
+                    f"Unable to inspect memory entry {path.name}: {exc}"
+                ) from exc
+            if not stat.S_ISREG(observed.st_mode):
+                raise MemoryIntegrityError(
+                    f"Memory entry is not a private regular file: {path.name}"
+                )
+            observed = MemoryStore._prepare_entry_links(path, descriptor, observed)
             if hasattr(os, "getuid") and observed.st_uid != os.getuid():
-                raise ValueError(f"Memory entry has an unexpected owner: {path.name}")
+                raise MemoryIntegrityError(f"Memory entry has an unexpected owner: {path.name}")
             if stat.S_IMODE(observed.st_mode) & 0o077:
-                raise ValueError(f"Memory entry permissions are not private: {path.name}")
+                raise MemoryIntegrityError(f"Memory entry permissions are not private: {path.name}")
             chunks: list[bytes] = []
-            while chunk := os.read(descriptor, 64 * 1024):
-                chunks.append(chunk)
+            try:
+                while chunk := os.read(descriptor, 64 * 1024):
+                    chunks.append(chunk)
+            except OSError as exc:
+                raise MemoryStorageError(f"Unable to read memory entry {path.name}: {exc}") from exc
             return b"".join(chunks)
         finally:
-            os.close(descriptor)
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
     def _publish_new_unlocked(self, entry: MemoryEntry) -> None:
         path = self._entry_path(entry.kind, entry.id)
         payload = json.dumps(entry.to_dict(), indent=2)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-        )
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+        except OSError as exc:
+            raise MemoryStorageError(f"Unable to stage memory entry {entry.id}: {exc}") from exc
         temporary_path = Path(temporary_name)
         published = False
         try:
@@ -311,37 +400,33 @@ class MemoryStore:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.link(temporary_path, path, follow_symlinks=False)
+            try:
+                os.link(temporary_path, path, follow_symlinks=False)
+            except FileExistsError:
+                raise
+            except OSError as exc:
+                raise MemoryStorageError(
+                    f"Unable to publish memory entry {entry.id}: {exc}"
+                ) from exc
             published = True
             try:
                 temporary_path.unlink()
-            except OSError as cleanup_error:
-                published_stat = temporary_path.stat()
-                try:
-                    observed = path.lstat()
-                    if (observed.st_dev, observed.st_ino) == (
-                        published_stat.st_dev,
-                        published_stat.st_ino,
-                    ):
-                        path.unlink()
-                finally:
-                    try:
-                        temporary_path.unlink(missing_ok=True)
-                    except OSError as retry_error:
-                        cleanup_error.add_note(
-                            f"failed to clean memory staging file: {retry_error}"
-                        )
-                    self._fsync_directory(path.parent)
-                raise
-            observed = path.lstat()
-            if observed.st_nlink != 1:
-                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            try:
                 self._fsync_directory(path.parent)
-                raise RuntimeError(f"Published memory entry is not private: {entry.id}")
-            self._fsync_directory(path.parent)
+            except OSError:
+                pass
+        except (FileExistsError, MemoryStorageError):
+            raise
+        except OSError as exc:
+            raise MemoryStorageError(f"Unable to stage memory entry {entry.id}: {exc}") from exc
         finally:
             if descriptor >= 0:
-                os.close(descriptor)
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
             if not published:
                 try:
                     temporary_path.unlink(missing_ok=True)
@@ -351,10 +436,14 @@ class MemoryStore:
     def _write_unlocked(self, entry: MemoryEntry) -> None:
         path = self._entry_path(entry.kind, entry.id)
         payload = json.dumps(entry.to_dict(), indent=2)
-        descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
-        )
+        try:
+            descriptor, temporary_name = tempfile.mkstemp(
+                prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+            )
+        except OSError as exc:
+            raise MemoryStorageError(f"Unable to stage memory entry {entry.id}: {exc}") from exc
         temporary_path = Path(temporary_name)
+        committed = False
         try:
             os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
@@ -363,11 +452,27 @@ class MemoryStore:
                 handle.flush()
                 os.fsync(handle.fileno())
             os.replace(temporary_path, path)
-            self._fsync_directory(path.parent)
+            committed = True
+            try:
+                self._fsync_directory(path.parent)
+            except OSError:
+                pass
+        except MemoryStorageError:
+            raise
+        except OSError as exc:
+            if committed:
+                return
+            raise MemoryStorageError(f"Unable to write memory entry {entry.id}: {exc}") from exc
         finally:
             if descriptor >= 0:
-                os.close(descriptor)
-            temporary_path.unlink(missing_ok=True)
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
@@ -383,16 +488,68 @@ class MemoryStore:
             except OSError:
                 pass
         finally:
-            os.close(directory)
+            try:
+                os.close(directory)
+            except OSError:
+                pass
+
+    def _occupied_entry_paths(self, entry_id: str) -> dict[MemoryKind, Path]:
+        occupied: dict[MemoryKind, Path] = {}
+        for kind in ("preset", "history"):
+            path = self._entry_path(kind, entry_id)
+            if self._path_occupied(path):
+                occupied[kind] = path
+        return occupied
+
+    def _resolve_entry_path(self, entry_id: str) -> tuple[MemoryKind, Path]:
+        occupied = self._occupied_entry_paths(entry_id)
+        if len(occupied) > 1:
+            raise MemoryIntegrityError(f"Memory entry id exists in multiple kinds: {entry_id}")
+        if not occupied:
+            raise FileNotFoundError(f"Memory entry not found: {entry_id}")
+        return next(iter(occupied.items()))
+
+    def _load_entry_from_path(
+        self,
+        path: Path,
+        *,
+        expected_id: str,
+        expected_kind: MemoryKind,
+    ) -> MemoryEntry:
+        try:
+            entry = MemoryEntry.from_dict(json.loads(self._read_entry_bytes(path)))
+        except MemoryIntegrityError:
+            raise
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
+            raise MemoryIntegrityError(f"Memory entry is invalid: {expected_id}") from exc
+        if entry.id != expected_id or entry.kind != expected_kind:
+            raise MemoryIntegrityError(
+                f"Memory entry identity differs from its path: {expected_id}"
+            )
+        return entry
+
+    def _save_new(self, entry: MemoryEntry) -> None:
+        with self._entry_lock(entry.id):
+            if self._occupied_entry_paths(entry.id):
+                raise FileExistsError(f"Memory entry id already exists: {entry.id}")
+            self._publish_new_unlocked(entry)
 
     def save(self, entry: MemoryEntry) -> None:
         with self._entry_lock(entry.id):
-            if any(
-                self._path_occupied(self._entry_path(kind, entry.id))
-                for kind in ("preset", "history")
-            ):
+            occupied = self._occupied_entry_paths(entry.id)
+            if len(occupied) > 1:
+                raise MemoryIntegrityError(f"Memory entry id exists in multiple kinds: {entry.id}")
+            if occupied and entry.kind not in occupied:
                 raise FileExistsError(f"Memory entry id already exists: {entry.id}")
-            self._publish_new_unlocked(entry)
+            if occupied:
+                self._load_entry_from_path(
+                    occupied[entry.kind],
+                    expected_id=entry.id,
+                    expected_kind=entry.kind,
+                )
+                self._write_unlocked(entry)
+            else:
+                self._publish_new_unlocked(entry)
 
     def _authorize(
         self,
@@ -423,19 +580,30 @@ class MemoryStore:
             self._validate_entry_id(entry_id)
         except ValueError:
             raise FileNotFoundError(f"Memory entry not found: {entry_id}") from None
-        for kind in ("preset", "history"):
-            path = self._entry_path(kind, entry_id)  # type: ignore[arg-type]
-            if self._path_occupied(path):
-                entry = MemoryEntry.from_dict(json.loads(self._read_entry_bytes(path)))
-                if entry.id != entry_id or entry.kind != kind:
-                    raise ValueError(f"Memory entry identity differs from its path: {entry_id}")
-                return self._authorize(
-                    entry,
-                    folder=folder,
-                    user_id=user_id,
-                    all_folders=all_folders,
-                )
-        raise FileNotFoundError(f"Memory entry not found: {entry_id}")
+        with self._entry_lock(entry_id):
+            return self._load_unlocked(
+                entry_id,
+                folder=folder,
+                user_id=user_id,
+                all_folders=all_folders,
+            )
+
+    def _load_unlocked(
+        self,
+        entry_id: str,
+        *,
+        folder: Path | None = None,
+        user_id: str | None = None,
+        all_folders: bool = False,
+    ) -> MemoryEntry:
+        kind, path = self._resolve_entry_path(entry_id)
+        entry = self._load_entry_from_path(path, expected_id=entry_id, expected_kind=kind)
+        return self._authorize(
+            entry,
+            folder=folder,
+            user_id=user_id,
+            all_folders=all_folders,
+        )
 
     def list_entries(
         self,
@@ -449,39 +617,44 @@ class MemoryStore:
         folder: Path | None = None,
         user_id: str | None = None,
     ) -> list[MemoryEntry]:
-        dirs = (
-            [(kind, self._kind_dir(kind))]
-            if kind
-            else [("preset", self.presets_dir), ("history", self.history_dir)]
-        )
         entries: list[MemoryEntry] = []
         required_labels = set(labels or [])
         query_text = (query or "").strip().lower()
         folder_path = str(folder.expanduser().resolve()) if folder else None
         actual_user = user_id or current_user_id()
-        for expected_kind, directory in dirs:
-            for path in sorted(directory.glob("*.json")):
-                try:
-                    entry = MemoryEntry.from_dict(json.loads(self._read_entry_bytes(path)))
-                    if entry.id != path.stem or entry.kind != expected_kind:
-                        raise ValueError("Memory entry identity differs from its path")
-                except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
-                    continue
-                if entry.archived and not include_archived:
-                    continue
-                if favorites_only and not entry.favorite:
-                    continue
-                if required_labels and not required_labels.issubset(set(entry.labels)):
-                    continue
-                if query_text:
-                    haystack = " ".join([entry.id, entry.title, *entry.labels]).lower()
-                    if query_text not in haystack:
+        candidate_ids = {
+            path.stem
+            for directory in (self.presets_dir, self.history_dir)
+            for path in directory.glob("*.json")
+        }
+        for entry_id in sorted(candidate_ids):
+            try:
+                with self._entry_lock(entry_id):
+                    expected_kind, path = self._resolve_entry_path(entry_id)
+                    if kind is not None and expected_kind != kind:
                         continue
-                if entry.scope.user_id != actual_user:
+                    entry = self._load_entry_from_path(
+                        path,
+                        expected_id=entry_id,
+                        expected_kind=expected_kind,
+                    )
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+                continue
+            if entry.archived and not include_archived:
+                continue
+            if favorites_only and not entry.favorite:
+                continue
+            if required_labels and not required_labels.issubset(set(entry.labels)):
+                continue
+            if query_text:
+                haystack = " ".join([entry.id, entry.title, *entry.labels]).lower()
+                if query_text not in haystack:
                     continue
-                if not all_folders and folder_path and entry.scope.folder_path != folder_path:
-                    continue
-                entries.append(entry)
+            if entry.scope.user_id != actual_user:
+                continue
+            if not all_folders and folder_path and entry.scope.folder_path != folder_path:
+                continue
+            entries.append(entry)
         return sorted(entries, key=lambda item: item.updated_at, reverse=True)
 
     def create(
@@ -531,7 +704,7 @@ class MemoryStore:
                 versions=[deepcopy(snapshot)],
             )
             try:
-                self.save(entry)
+                self._save_new(entry)
             except FileExistsError:
                 continue
             return entry
@@ -575,7 +748,7 @@ class MemoryStore:
             raise ValueError("No memory changes requested")
 
         with self._entry_lock(entry_id):
-            entry = self.load(
+            entry = self._load_unlocked(
                 entry_id,
                 folder=folder,
                 user_id=user_id,
@@ -632,9 +805,19 @@ class MemoryStore:
         all_folders: bool = False,
     ) -> None:
         with self._entry_lock(entry_id):
-            entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
+            entry = self._load_unlocked(
+                entry_id,
+                folder=folder,
+                user_id=user_id,
+                all_folders=all_folders,
+            )
             path = self._entry_path(entry.kind, entry.id)
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as exc:
+                raise MemoryStorageError(
+                    f"Unable to delete memory entry {entry.id}: {exc}"
+                ) from exc
             self._fsync_directory(path.parent)
 
     def mark_used(
@@ -646,7 +829,12 @@ class MemoryStore:
         all_folders: bool = False,
     ) -> MemoryEntry:
         with self._entry_lock(entry_id):
-            entry = self.load(entry_id, folder=folder, user_id=user_id, all_folders=all_folders)
+            entry = self._load_unlocked(
+                entry_id,
+                folder=folder,
+                user_id=user_id,
+                all_folders=all_folders,
+            )
             entry.use_count += 1
             entry.last_used_at = utc_now()
             self._write_unlocked(entry)

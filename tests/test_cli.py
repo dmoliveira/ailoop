@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from ailoop.cli import _read_log_content, _read_log_excerpt, main
-from ailoop.memory import MemoryStore
+from ailoop.memory import MemoryIntegrityError, MemoryStorageError, MemoryStore
 from ailoop.models import LoopRunConfig, LoopState
 from ailoop.service import LoopService
 
@@ -999,7 +999,7 @@ def test_memory_storage_error_is_reported_without_traceback(
     config_path = write_test_config(tmp_path)
     monkeypatch.setattr(
         "ailoop.memory.MemoryStore.load",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("unsafe storage")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryStorageError("unsafe storage")),
     )
     monkeypatch.setattr(
         "sys.argv",
@@ -1011,6 +1011,41 @@ def test_memory_storage_error_is_reported_without_traceback(
 
     assert exc.value.code == 1
     assert capsys.readouterr().out == "Storage error: unsafe storage\n"
+
+
+def test_memory_integrity_error_is_reported_without_traceback(
+    capsys, monkeypatch, tmp_path: Path
+) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setattr(
+        "ailoop.memory.MemoryStore.load",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(MemoryIntegrityError("ambiguous entry")),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "show", "a" * 12],
+    )
+
+    with pytest.raises(SystemExit) as exc:
+        main()
+
+    assert exc.value.code == 1
+    assert capsys.readouterr().out == "Memory integrity error: ambiguous entry\n"
+
+
+def test_unclassified_os_error_is_not_mislabeled_as_storage(monkeypatch, tmp_path: Path) -> None:
+    config_path = write_test_config(tmp_path)
+    monkeypatch.setattr(
+        "ailoop.memory.MemoryStore.load",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("unclassified")),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        ["ailoop", "--config", str(config_path), "memory", "show", "a" * 12],
+    )
+
+    with pytest.raises(OSError, match="unclassified"):
+        main()
 
 
 def test_status_missing_loop_is_friendly(capsys, monkeypatch, tmp_path: Path) -> None:

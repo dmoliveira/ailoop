@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import json
+import multiprocessing
 import os
 import stat
 import threading
@@ -12,7 +14,12 @@ from unittest import mock
 
 import pytest
 
-from ailoop.memory import MAX_MEMORY_ID_ATTEMPTS, MemoryStore
+from ailoop.memory import (
+    MAX_MEMORY_ID_ATTEMPTS,
+    MemoryIntegrityError,
+    MemoryStorageError,
+    MemoryStore,
+)
 from ailoop.models import LoopRunConfig
 
 
@@ -32,6 +39,42 @@ def make_run_config() -> LoopRunConfig:
         runner_command="python3",
         runner_args=[],
     )
+
+
+def create_memory_in_process(
+    state_root: str,
+    folder: str,
+    kind: str,
+    title: str,
+    collision_id: str,
+    replacement_id: str,
+    ready,
+    start,
+    results,
+) -> None:
+    store = MemoryStore(Path(state_root))
+    ready.put(title)
+    if not start.wait(timeout=10):
+        results.put(("error", title, "start timeout"))
+        return
+    with mock.patch(
+        "ailoop.memory.uuid.uuid4",
+        side_effect=[
+            SimpleNamespace(hex=collision_id),
+            SimpleNamespace(hex=replacement_id),
+        ],
+    ):
+        try:
+            entry = store.create(
+                kind=kind,  # type: ignore[arg-type]
+                title=title,
+                run_config=make_run_config(),
+                folder=Path(folder),
+            )
+        except Exception as exc:  # pragma: no cover - reported to the parent process
+            results.put(("error", title, repr(exc)))
+        else:
+            results.put(("ok", entry.id, entry.title))
 
 
 @pytest.mark.parametrize(
@@ -101,7 +144,7 @@ def test_memory_create_exhaustion_fails_closed(tmp_path: Path) -> None:
     assert list(store.history_dir.glob("*.json")) == []
 
 
-def test_public_save_rejects_overwrite_and_cross_kind_collision(tmp_path: Path) -> None:
+def test_public_save_upserts_same_kind_and_rejects_cross_kind_collision(tmp_path: Path) -> None:
     store = MemoryStore(tmp_path)
     entry = store.create(
         kind="preset",
@@ -110,17 +153,42 @@ def test_public_save_rejects_overwrite_and_cross_kind_collision(tmp_path: Path) 
         folder=tmp_path,
     )
     path = store._entry_path(entry.kind, entry.id)
-    original = path.read_bytes()
+    updated = deepcopy(entry)
+    updated.title = "updated"
+    store.save(updated)
+    updated_bytes = path.read_bytes()
 
-    with pytest.raises(FileExistsError, match="already exists"):
-        store.save(deepcopy(entry))
+    assert store.load(entry.id, folder=tmp_path).title == "updated"
     duplicate = deepcopy(entry)
     duplicate.kind = "history"
     with pytest.raises(FileExistsError, match="already exists"):
         store.save(duplicate)
 
-    assert path.read_bytes() == original
+    assert path.read_bytes() == updated_bytes
     assert not store._entry_path("history", entry.id).exists()
+
+
+def test_public_save_rejects_unmanaged_hardlink_without_touching_target(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    entry = store.create(
+        kind="preset",
+        title="existing",
+        run_config=make_run_config(),
+        folder=tmp_path,
+    )
+    path = store._entry_path(entry.kind, entry.id)
+    outside = tmp_path / "outside-entry.json"
+    path.replace(outside)
+    os.link(outside, path)
+    original = outside.read_bytes()
+
+    updated = deepcopy(entry)
+    updated.title = "must not write"
+    with pytest.raises(MemoryIntegrityError, match="private regular file"):
+        store.save(updated)
+
+    assert outside.read_bytes() == original
+    assert path.read_bytes() == original
 
 
 def test_broken_symlink_is_occupied_without_touching_target(tmp_path: Path) -> None:
@@ -196,7 +264,7 @@ def test_missing_no_follow_support_fails_closed(tmp_path: Path, monkeypatch) -> 
         "ailoop.memory.uuid.uuid4",
         return_value=SimpleNamespace(hex=entry_id),
     ):
-        with pytest.raises(RuntimeError, match="no-follow"):
+        with pytest.raises(MemoryIntegrityError, match="no-follow"):
             store.create(
                 kind="preset",
                 title="blocked",
@@ -217,7 +285,7 @@ def test_hardlinked_lock_file_fails_closed(tmp_path: Path) -> None:
         "ailoop.memory.uuid.uuid4",
         return_value=SimpleNamespace(hex=entry_id),
     ):
-        with pytest.raises(RuntimeError, match="regular file"):
+        with pytest.raises(MemoryIntegrityError, match="private regular file"):
             store.create(
                 kind="preset",
                 title="blocked",
@@ -274,7 +342,7 @@ def test_memory_directory_symlink_fails_closed(tmp_path: Path) -> None:
     outside.mkdir()
     (state_root / "memory").symlink_to(outside, target_is_directory=True)
 
-    with pytest.raises((OSError, RuntimeError)):
+    with pytest.raises((MemoryIntegrityError, OSError)):
         MemoryStore(state_root)
     assert list(outside.iterdir()) == []
 
@@ -345,7 +413,9 @@ def test_nonprivate_entry_permissions_are_rejected(tmp_path: Path) -> None:
     assert store.list_entries(folder=tmp_path) == []
 
 
-def test_staging_cleanup_failure_rolls_back_publication(tmp_path: Path, monkeypatch) -> None:
+def test_staging_cleanup_failure_keeps_committed_entry_readable(
+    tmp_path: Path, monkeypatch
+) -> None:
     store = MemoryStore(tmp_path)
     entry_id = "6" * 12
     original_unlink = Path.unlink
@@ -363,16 +433,149 @@ def test_staging_cleanup_failure_rolls_back_publication(tmp_path: Path, monkeypa
         "ailoop.memory.uuid.uuid4",
         return_value=SimpleNamespace(hex=entry_id),
     ):
-        with pytest.raises(OSError, match="staging unlink failed"):
+        entry = store.create(
+            kind="preset",
+            title="committed",
+            run_config=make_run_config(),
+            folder=tmp_path,
+        )
+
+    path = store._entry_path("preset", entry_id)
+    staging_paths = list(store.presets_dir.glob("*.tmp"))
+    assert entry.id == entry_id
+    assert path.exists()
+    assert len(staging_paths) == 1
+    assert path.stat().st_ino == staging_paths[0].stat().st_ino
+    assert store.load(entry_id, folder=tmp_path).title == "committed"
+    assert not staging_paths[0].exists()
+
+
+def test_persistent_staging_cleanup_failure_keeps_final_and_fails_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = MemoryStore(tmp_path)
+    entry_id = "b" * 12
+    original_unlink = Path.unlink
+
+    def fail_staging_unlink(path: Path, *args, **kwargs) -> None:
+        if path.suffix == ".tmp":
+            raise OSError("persistent staging unlink failure")
+        original_unlink(path, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "unlink", fail_staging_unlink)
+        with mock.patch(
+            "ailoop.memory.uuid.uuid4",
+            return_value=SimpleNamespace(hex=entry_id),
+        ):
             store.create(
                 kind="preset",
-                title="rolled back",
+                title="committed",
                 run_config=make_run_config(),
                 folder=tmp_path,
             )
+        with pytest.raises(MemoryStorageError, match="persistent staging unlink failure"):
+            store.load(entry_id, folder=tmp_path)
 
-    assert not store._entry_path("preset", entry_id).exists()
+    path = store._entry_path("preset", entry_id)
+    assert path.exists()
+    assert len(list(store.presets_dir.glob("*.tmp"))) == 1
+    assert store.load(entry_id, folder=tmp_path).title == "committed"
     assert list(store.presets_dir.glob("*.tmp")) == []
+
+
+def test_staging_cleanup_never_masks_an_unmanaged_hardlink(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    entry = store.create(
+        kind="preset",
+        title="private",
+        run_config=make_run_config(),
+        folder=tmp_path,
+    )
+    path = store._entry_path(entry.kind, entry.id)
+    staging = path.parent / f".{path.name}.stale.tmp"
+    outside = tmp_path / "outside-entry-hardlink.json"
+    os.link(path, staging)
+    os.link(path, outside)
+    original = path.read_bytes()
+
+    with pytest.raises(MemoryIntegrityError, match="private regular file"):
+        store.load(entry.id, folder=tmp_path)
+
+    assert not staging.exists()
+    assert path.read_bytes() == original
+    assert outside.read_bytes() == original
+
+
+def test_delete_removes_recoverable_staging_alias(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    entry = store.create(
+        kind="preset",
+        title="delete",
+        run_config=make_run_config(),
+        folder=tmp_path,
+    )
+    path = store._entry_path(entry.kind, entry.id)
+    staging = path.parent / f".{path.name}.stale.tmp"
+    os.link(path, staging)
+
+    store.delete(entry.id, folder=tmp_path)
+
+    assert not path.exists()
+    assert not staging.exists()
+
+
+def test_postcommit_lock_cleanup_failure_does_not_report_create_failure(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = MemoryStore(tmp_path)
+    entry_id = "c" * 12
+    original_flock = fcntl.flock
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        if operation == fcntl.LOCK_UN:
+            raise OSError("unlock failed")
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr("ailoop.memory.fcntl.flock", fail_unlock)
+    with mock.patch(
+        "ailoop.memory.uuid.uuid4",
+        return_value=SimpleNamespace(hex=entry_id),
+    ):
+        entry = store.create(
+            kind="preset",
+            title="committed",
+            run_config=make_run_config(),
+            folder=tmp_path,
+        )
+
+    assert entry.id == entry_id
+    assert store.load(entry_id, folder=tmp_path).title == "committed"
+
+
+def test_postcommit_directory_fsync_failure_keeps_published_entry(
+    tmp_path: Path, monkeypatch
+) -> None:
+    store = MemoryStore(tmp_path)
+    entry_id = "7" * 12
+
+    def fail_directory_fsync(_path: Path) -> None:
+        raise OSError("directory fsync failed")
+
+    monkeypatch.setattr(MemoryStore, "_fsync_directory", staticmethod(fail_directory_fsync))
+    with mock.patch(
+        "ailoop.memory.uuid.uuid4",
+        return_value=SimpleNamespace(hex=entry_id),
+    ):
+        entry = store.create(
+            kind="preset",
+            title="committed",
+            run_config=make_run_config(),
+            folder=tmp_path,
+        )
+
+    assert entry.id == entry_id
+    assert store.load(entry_id, folder=tmp_path).title == "committed"
 
 
 def test_failed_staging_write_publishes_nothing(tmp_path: Path, monkeypatch) -> None:
@@ -433,3 +636,99 @@ def test_concurrent_identical_candidate_creations_remain_unique(tmp_path: Path) 
         "first",
         "second",
     ]
+
+
+@pytest.mark.parametrize(
+    ("first_kind", "second_kind"),
+    [("preset", "preset"), ("preset", "history")],
+)
+def test_separate_process_candidate_collisions_remain_globally_unique(
+    tmp_path: Path,
+    first_kind: str,
+    second_kind: str,
+) -> None:
+    MemoryStore(tmp_path)
+    context = multiprocessing.get_context("spawn")
+    ready = context.Queue()
+    start = context.Event()
+    results = context.Queue()
+    collision_id = "8" * 12
+    processes = [
+        context.Process(
+            target=create_memory_in_process,
+            args=(
+                str(tmp_path),
+                str(tmp_path),
+                kind,
+                title,
+                collision_id,
+                replacement_id,
+                ready,
+                start,
+                results,
+            ),
+        )
+        for kind, title, replacement_id in (
+            (first_kind, "first", "9" * 12),
+            (second_kind, "second", "a" * 12),
+        )
+    ]
+
+    try:
+        for process in processes:
+            process.start()
+        assert {ready.get(timeout=15), ready.get(timeout=15)} == {"first", "second"}
+        start.set()
+        outcomes = [results.get(timeout=15), results.get(timeout=15)]
+        for process in processes:
+            process.join(timeout=15)
+            assert process.exitcode == 0
+    finally:
+        start.set()
+        for process in processes:
+            if process.is_alive():
+                process.terminate()
+            process.join(timeout=5)
+
+    assert all(outcome[0] == "ok" for outcome in outcomes), outcomes
+    ids = {outcome[1] for outcome in outcomes}
+    assert len(ids) == 2
+    assert collision_id in ids
+    assert sorted(entry.title for entry in MemoryStore(tmp_path).list_entries(folder=tmp_path)) == [
+        "first",
+        "second",
+    ]
+
+
+def test_legacy_cross_kind_duplicate_fails_closed_for_mutations(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    entry = store.create(
+        kind="preset",
+        title="preset",
+        run_config=make_run_config(),
+        folder=tmp_path,
+    )
+    preset_path = store._entry_path("preset", entry.id)
+    duplicate = deepcopy(entry)
+    duplicate.kind = "history"
+    duplicate.title = "history"
+    history_path = store._entry_path("history", entry.id)
+    history_path.write_text(json.dumps(duplicate.to_dict()), encoding="utf-8")
+    history_path.chmod(0o600)
+    original = (preset_path.read_bytes(), history_path.read_bytes())
+
+    with pytest.raises(MemoryIntegrityError, match="multiple kinds"):
+        store.load(entry.id, folder=tmp_path)
+    with pytest.raises(MemoryIntegrityError, match="multiple kinds"):
+        store.edit(entry.id, title="unsafe", folder=tmp_path)
+    with pytest.raises(MemoryIntegrityError, match="multiple kinds"):
+        store.delete(entry.id, folder=tmp_path)
+    with pytest.raises(MemoryIntegrityError, match="multiple kinds"):
+        store.mark_used(entry.id, folder=tmp_path)
+    updated = deepcopy(entry)
+    updated.title = "unsafe save"
+    with pytest.raises(MemoryIntegrityError, match="multiple kinds"):
+        store.save(updated)
+
+    assert (preset_path.read_bytes(), history_path.read_bytes()) == original
+    assert store.list_entries(folder=tmp_path) == []
