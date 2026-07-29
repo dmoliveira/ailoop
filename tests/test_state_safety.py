@@ -1,3 +1,4 @@
+import fcntl
 import json
 import subprocess
 import sys
@@ -96,6 +97,55 @@ with StateStore(root).acquire_lock("shared-loop"):
 
     assert store.is_locked("shared-loop") is False
     assert lock_file(tmp_path, "shared-loop").exists()
+
+
+@pytest.mark.parametrize("lock_method", ["acquire_mutation_lock", "acquire_lock"])
+def test_unlock_failure_preserves_primary_result_and_releases_lock(
+    monkeypatch,
+    tmp_path: Path,
+    lock_method: str,
+) -> None:
+    store = StateStore(tmp_path)
+    original_flock = fcntl.flock
+    unlock_attempts = 0
+
+    def fail_unlock(descriptor: int, operation: int) -> None:
+        nonlocal unlock_attempts
+        if operation == fcntl.LOCK_UN:
+            unlock_attempts += 1
+            raise OSError("unlock failed")
+        original_flock(descriptor, operation)
+
+    monkeypatch.setattr("ailoop.state.fcntl.flock", fail_unlock)
+    lock = getattr(store, lock_method)
+
+    with pytest.raises(RuntimeError, match="primary body failure"):
+        with lock("cleanup-lock"):
+            raise RuntimeError("primary body failure")
+
+    with lock("cleanup-lock"):
+        pass
+
+    assert unlock_attempts == 2
+
+
+def test_execution_lock_pre_yield_fsync_failure_releases_lock(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(
+            "ailoop.state.os.fsync",
+            lambda _descriptor: (_ for _ in ()).throw(OSError("pid fsync failed")),
+        )
+        with pytest.raises(OSError, match="pid fsync failed"):
+            with store.acquire_lock("pre-yield-lock"):
+                pytest.fail("lock body must not run")
+
+    with store.acquire_lock("pre-yield-lock"):
+        pass
 
 
 def test_concurrent_create_if_absent_preserves_one_winner(tmp_path: Path) -> None:
