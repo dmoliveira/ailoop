@@ -152,6 +152,13 @@ class LoopService:
         with self.store.mutate(loop_id) as state:
             if state.status == "cleanup_failed":
                 raise RuntimeError(f"Loop process cleanup was not confirmed: {loop_id}")
+            if self._is_scheduled(state) and (
+                control != "stop" or state.status not in CLAIMED_STATUSES
+            ):
+                raise RuntimeError(
+                    "Scheduled loops are saved configurations and cannot be "
+                    f"controlled manually: {loop_id}"
+                )
             state.control = control
             if control == "pause":
                 if state.status == "running":
@@ -260,6 +267,11 @@ class LoopService:
             state.dashboard_config = dashboard_config
             state.workspace_config = workspace_config
             if self._is_scheduled(state):
+                if state.pending_single_iteration:
+                    raise RuntimeError(
+                        "Cannot save scheduled mode while a manual iteration is pending"
+                    )
+                state.control = "run"
                 state.status = "idle"
         return state
 
