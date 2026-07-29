@@ -323,6 +323,7 @@ def test_tui_remove_uses_force_for_paused_loop(tmp_path: Path) -> None:
         app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
         app.service = service
         app.selected_loop_id = "paused-loop"
+        app.filter_mode = "all"
 
         def fake_remove(loop_id, force=False):  # type: ignore[no-untyped-def]
             seen["loop_id"] = loop_id
@@ -1868,6 +1869,7 @@ def test_missing_cwd_tui_flow_keeps_safe_cwd_for_replay_and_resume(
         app.log_kind = "memory"
         app.memory_filter = "history"
         app.selected_loop_id = "loop-123"
+        app.filter_mode = "all"
         async with app.run_test() as pilot:
             app.refresh_data()
             await pilot.pause()
@@ -2968,7 +2970,7 @@ def test_action_next_iteration_requests_single_step_and_resume(tmp_path: Path) -
     assert updated.control == "run"
     assert seen == {
         "loop_id": state.loop_id,
-        "message": f"next iteration queued: {state.loop_id}",
+        "message": f"next iteration queued; worker launch requested: {state.loop_id}",
         "refreshed": "yes",
     }
 
@@ -3010,7 +3012,7 @@ def test_action_resume_selected_resets_control_to_run(tmp_path: Path) -> None:
     assert updated.control == "run"
     assert seen == {
         "loop_id": state.loop_id,
-        "message": f"resume sent: {state.loop_id}",
+        "message": f"resume worker launch requested: {state.loop_id}",
         "refreshed": "yes",
     }
 
@@ -3181,7 +3183,7 @@ def test_scheduled_conversion_reports_spawn_failure_without_throwing(tmp_path: P
 
     assert result is None
     assert service.load_loop(state.loop_id).dashboard_config["mode"] == "fixed"
-    assert messages == ["configuration saved but worker failed to start: spawn unavailable"]
+    assert messages == ["configuration saved but worker failed to launch: spawn unavailable"]
 
 
 def test_action_save_schedule_warns_when_manual_iteration_is_pending(tmp_path: Path) -> None:
@@ -3464,7 +3466,7 @@ def test_restart_actions_clear_pending_single_iteration(tmp_path: Path) -> None:
     reset = service.load_loop(state.loop_id)
     assert reset.pending_single_iteration is False
     assert resumed == [state.loop_id, state.loop_id]
-    assert notifications[-1] == f"counter reset; restart sent: {state.loop_id}"
+    assert notifications[-1] == (f"counter reset; restart worker launch requested: {state.loop_id}")
 
 
 def test_safety_card_text_compacts_preview_summary() -> None:
@@ -4377,10 +4379,10 @@ def test_failed_new_schedule_creation_preserves_draft_and_selection(
 @pytest.mark.parametrize(
     ("action_name", "expected_message"),
     [
-        ("resume", "resume request saved but worker failed to start: spawn unavailable"),
-        ("new", "loop created but worker failed to start: spawn unavailable"),
-        ("next", "next iteration queued but worker failed to start: spawn unavailable"),
-        ("follow-up", "follow-up queued but worker failed to start: spawn unavailable"),
+        ("resume", "resume request saved but worker failed to launch: spawn unavailable"),
+        ("new", "loop created but worker failed to launch: spawn unavailable"),
+        ("next", "next iteration queued but worker failed to launch: spawn unavailable"),
+        ("follow-up", "follow-up queued but worker failed to launch: spawn unavailable"),
     ],
 )
 def test_worker_spawn_failures_recover_after_persisted_actions(
@@ -4745,14 +4747,160 @@ def test_loop_query_preserves_hidden_selection_and_unsaved_form(tmp_path: Path) 
             assert app.filter_mode == "all"
             assert table.row_count == 1
             assert table.get_row(second.loop_id)
+            assert table.show_cursor is False
             assert app.query_one("#config-prompt", TextArea).text == "unsaved prompt draft"
             assert app.query_one("#workspace-root", Input).value == str(edited_workspace)
             assert app.query_one("#follow-up-prompt", TextArea).text == "unsaved follow-up"
             assert "outside results" in str(app.query_one("#sidebar_stats").render())
 
+            app.action_save_config()
+            app.action_remove_selected()
+            assert service.load_loop(first.loop_id).run_config.prompt == "First review"
+            assert service.load_loop(second.loop_id).loop_id == second.loop_id
+            assert app.delete_armed is False
+
     import asyncio
 
     asyncio.run(run_test())
+
+
+def test_visible_loop_binding_uses_row_identity() -> None:
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app._visible_loop_ids = {"loop-a", "loop-b"}
+    app.selected_loop_id = "loop-a"
+    app.delete_armed = True
+    app._delete_armed_loop_id = "loop-a"
+    app._render_selected = lambda: None  # type: ignore[method-assign]
+    app._bind_visible_loop("loop-b")
+
+    assert app.selected_loop_id == "loop-b"
+    assert app.delete_armed is False
+    assert app._delete_armed_loop_id is None
+
+
+def test_filter_rebinds_hidden_persisted_selection_to_visible_row(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    hidden = service.create_loop(make_loop_config(), loop_id="completed-loop")
+    hidden.status = "completed"
+    persist_test_state(service, hidden)
+    visible = service.create_loop(make_loop_config(), loop_id="running-loop")
+    visible.status = "running"
+    persist_test_state(service, visible)
+
+    async def run_test() -> None:
+        app = LoopDashboard(
+            Path("~/.config/ailoop/config.yaml").expanduser(), loop_id=hidden.loop_id
+        )
+        app.service = service
+        app.filter_mode = "all"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            assert app.selected_loop_id == hidden.loop_id
+            app.action_filter_running()
+            await pilot.pause()
+            assert app.selected_loop_id == visible.loop_id
+            assert app.query_one("#loops", DataTable).show_cursor is True
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+def test_table_arrow_highlight_updates_selected_loop_identity(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    service.create_loop(make_loop_config(), loop_id="first-loop")
+    service.create_loop(make_loop_config(), loop_id="second-loop")
+
+    async def run_test() -> None:
+        app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+        app.service = service
+        app.filter_mode = "all"
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            initial_id = app.selected_loop_id
+            app.query_one("#loops", DataTable).focus()
+            await pilot.press("down")
+            await pilot.pause()
+            assert app.selected_loop_id is not None
+            assert app.selected_loop_id != initial_id
+
+    import asyncio
+
+    asyncio.run(run_test())
+
+
+@pytest.mark.parametrize("action", ["archive", "delete"])
+def test_memory_confirmation_rearms_when_visible_identity_changes(
+    tmp_path: Path,
+    action: str,
+) -> None:
+    memory = MemoryStore(tmp_path)
+    first = memory.create(
+        kind="preset",
+        title="First",
+        run_config=make_loop_config(),
+        folder=Path.cwd(),
+    )
+    second = memory.create(
+        kind="preset",
+        title="Second",
+        run_config=make_loop_config(),
+        folder=Path.cwd(),
+    )
+    order = [first, second]
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    app._memory_entries = lambda: order  # type: ignore[method-assign]
+    app._sync_button_state = lambda: None  # type: ignore[method-assign]
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+    app.notify = lambda *args, **kwargs: None  # type: ignore[method-assign]
+    action_method = getattr(app, f"action_memory_{action}")
+
+    action_method()
+    order[:] = [second, first]
+    action_method()
+
+    assert memory.load(second.id, folder=Path.cwd()).archived is False
+    if action == "archive":
+        assert app._memory_archive_armed_entry_id == second.id
+    else:
+        assert app._memory_delete_armed_entry_id == second.id
+
+    action_method()
+    if action == "archive":
+        assert memory.load(second.id, folder=Path.cwd()).archived is True
+    else:
+        with pytest.raises(FileNotFoundError):
+            memory.load(second.id, folder=Path.cwd())
+    assert memory.load(first.id, folder=Path.cwd()).id == first.id
+
+
+def test_memory_replay_spawn_failure_is_recoverable(tmp_path: Path) -> None:
+    memory = MemoryStore(tmp_path)
+    entry = memory.create(
+        kind="preset",
+        title="Replay",
+        run_config=make_loop_config(),
+        folder=Path.cwd(),
+    )
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.memory = memory
+    app.log_kind = "memory"
+    messages: list[tuple[str, str | None]] = []
+
+    def fail_spawn(_entry_id: str, *, all_folders: bool) -> None:
+        raise OSError(f"spawn unavailable ({all_folders})")
+
+    app._spawn_replay = fail_spawn  # type: ignore[method-assign]
+    app.notify = lambda message, **kwargs: messages.append(  # type: ignore[method-assign]
+        (message, kwargs.get("severity"))
+    )
+
+    app.action_memory_replay()
+
+    assert messages == [("replay failed to launch: spawn unavailable (False)", "error")]
+    assert memory.load(entry.id, folder=Path.cwd()).id == entry.id
 
 
 def test_loop_query_keyboard_focus_submit_and_clear(tmp_path: Path) -> None:
