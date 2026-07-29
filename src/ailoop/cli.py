@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .config import default_config_path, init_config_text, load_app_config, resolve_run_config
 from .memory import (
+    MemoryIntegrityError,
+    MemoryStorageError,
     MemoryStore,
     VersionSnapshot,
     render_memory_list,
@@ -949,6 +951,18 @@ def main() -> None:
         else:
             print(_friendly_not_found_message(args, exc))
         raise SystemExit(1) from exc
+    except MemoryIntegrityError as exc:
+        if args.json:
+            print_json({"ok": False, "error": str(exc)})
+        else:
+            print(f"Memory integrity error: {exc}")
+        raise SystemExit(1) from exc
+    except MemoryStorageError as exc:
+        if args.json:
+            print_json({"ok": False, "error": str(exc)})
+        else:
+            print(f"Storage error: {exc}")
+        raise SystemExit(1) from exc
     except ValueError as exc:
         if args.json:
             print_json({"ok": False, "error": str(exc)})
@@ -960,12 +974,6 @@ def main() -> None:
             print_json({"ok": False, "error": str(exc)})
         else:
             print(f"Error: {exc}")
-        raise SystemExit(1) from exc
-    except OSError as exc:
-        if args.json:
-            print_json({"ok": False, "error": str(exc)})
-        else:
-            print(f"Storage error: {exc}")
         raise SystemExit(1) from exc
     finally:
         set_color_mode(previous_color_mode)
