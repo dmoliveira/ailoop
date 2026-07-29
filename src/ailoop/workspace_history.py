@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
+import os
+import stat
+import tempfile
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from typing import Literal
@@ -60,13 +64,88 @@ class WorkspaceHistoryStore:
     def __init__(self, state_root: Path):
         self.state_root = state_root
 
+    def _history_path(self, workspace_root: str, *, create: bool) -> Path:
+        path = workspace_history_file(self.state_root, workspace_root)
+        root = self.state_root / "workspaces"
+        if create:
+            ensure_dir(root)
+        if root.is_symlink() or (root.exists() and not root.is_dir()):
+            raise RuntimeError(f"Unsafe workspace history root: {root}")
+        if create:
+            path.parent.mkdir(mode=0o700, exist_ok=True)
+        if path.parent.is_symlink() or (path.parent.exists() and not path.parent.is_dir()):
+            raise RuntimeError(f"Unsafe workspace history directory: {path.parent}")
+        if path.parent.exists() and path.parent.resolve().parent != root.resolve():
+            raise RuntimeError(f"Workspace history directory escapes root: {path.parent}")
+        if path.is_symlink() or (path.exists() and not stat.S_ISREG(path.stat().st_mode)):
+            raise RuntimeError(f"Unsafe workspace history file: {path}")
+        return path
+
+    def _validate_discovered_history_path(self, path: Path) -> bool:
+        root = self.state_root / "workspaces"
+        return (
+            not root.is_symlink()
+            and not path.parent.is_symlink()
+            and not path.is_symlink()
+            and path.is_file()
+            and path.parent.resolve().parent == root.resolve()
+        )
+
     def append(self, entry: WorkspaceHistoryEntry) -> None:
-        path = workspace_history_file(self.state_root, entry.workspace_root)
-        ensure_dir(path.parent)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(entry.to_dict()) + "\n")
-        if path.stat().st_size > HISTORY_MAX_BYTES:
-            path.write_text(read_last_lines(path, HISTORY_RETAIN_LINES) + "\n", encoding="utf-8")
+        path = self._history_path(entry.workspace_root, create=True)
+        lock_path = path.parent / "prompt-history.lock"
+        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        lock_fd = os.open(lock_path, flags, 0o600)
+        with os.fdopen(lock_fd, "a+", encoding="utf-8") as lock_handle:
+            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX)
+            try:
+                opened = os.fstat(lock_handle.fileno())
+                linked = os.stat(lock_path, follow_symlinks=False)
+                if (opened.st_dev, opened.st_ino) != (
+                    linked.st_dev,
+                    linked.st_ino,
+                ) or opened.st_nlink != 1:
+                    raise RuntimeError(f"Workspace history lock identity changed: {lock_path}")
+                data_flags = (
+                    os.O_WRONLY
+                    | os.O_APPEND
+                    | os.O_CREAT
+                    | getattr(os, "O_CLOEXEC", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                )
+                data_fd = os.open(path, data_flags, 0o600)
+                with os.fdopen(data_fd, "a", encoding="utf-8") as handle:
+                    opened_data = os.fstat(handle.fileno())
+                    linked_data = os.stat(path, follow_symlinks=False)
+                    if (
+                        (opened_data.st_dev, opened_data.st_ino)
+                        != (linked_data.st_dev, linked_data.st_ino)
+                        or opened_data.st_nlink != 1
+                        or not stat.S_ISREG(opened_data.st_mode)
+                    ):
+                        raise RuntimeError(f"Workspace history file identity changed: {path}")
+                    handle.write(json.dumps(entry.to_dict()) + "\n")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if path.stat().st_size > HISTORY_MAX_BYTES:
+                    content = read_last_lines(path, HISTORY_RETAIN_LINES) + "\n"
+                    fd, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+                    try:
+                        with os.fdopen(fd, "w", encoding="utf-8") as temp_handle:
+                            temp_handle.write(content)
+                            temp_handle.flush()
+                            os.fsync(temp_handle.fileno())
+                        os.replace(temp_name, path)
+                        directory_fd = os.open(path.parent, os.O_RDONLY)
+                        try:
+                            os.fsync(directory_fd)
+                        finally:
+                            os.close(directory_fd)
+                    finally:
+                        if os.path.exists(temp_name):
+                            os.unlink(temp_name)
+            finally:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
     def append_prompt(self, loop_id: str, run_config: LoopRunConfig) -> None:
         root = canonical_workspace_root(run_config.workspace_root)
@@ -128,7 +207,11 @@ class WorkspaceHistoryStore:
             return []
         roots: list[str] = []
         history_files = sorted(
-            (self.state_root / "workspaces").glob("*/prompt-history.jsonl"),
+            (
+                path
+                for path in (self.state_root / "workspaces").glob("*/prompt-history.jsonl")
+                if self._validate_discovered_history_path(path)
+            ),
             key=lambda item: item.stat().st_mtime,
             reverse=True,
         )
@@ -149,7 +232,7 @@ class WorkspaceHistoryStore:
         root = canonical_workspace_root(workspace_root)
         if not root:
             return None
-        path = workspace_history_file(self.state_root, root)
+        path = self._history_path(root, create=False)
         if not path.exists():
             return None
         for raw_line in reversed(read_last_lines(path, HISTORY_TAIL_LINES).splitlines()):
@@ -171,7 +254,7 @@ class WorkspaceHistoryStore:
         root = canonical_workspace_root(workspace_root)
         if not root or limit <= 0 or max_chars <= 0:
             return []
-        path = workspace_history_file(self.state_root, root)
+        path = self._history_path(root, create=False)
         if not path.exists():
             return []
         rows: list[WorkspaceHistoryEntry] = []

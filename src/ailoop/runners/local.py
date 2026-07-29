@@ -99,9 +99,22 @@ class LocalRunner:
         full_env.update(env)
         lifecycle = lifecycle or RunnerLifecycle()
 
+        log_flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+        )
+        stdout_fd = os.open(stdout_log, log_flags, 0o600)
+        try:
+            stderr_fd = os.open(stderr_log, log_flags, 0o600)
+        except BaseException:
+            os.close(stdout_fd)
+            raise
         with (
-            stdout_log.open("w", encoding="utf-8") as stdout_handle,
-            stderr_log.open("w", encoding="utf-8") as stderr_handle,
+            os.fdopen(stdout_fd, "w", encoding="utf-8") as stdout_handle,
+            os.fdopen(stderr_fd, "w", encoding="utf-8") as stderr_handle,
         ):
             try:
                 process = subprocess.Popen(
