@@ -3026,7 +3026,7 @@ class LoopDashboard(App[None]):
         if self.memory_label is not None:
             return f"{prefix} c to clear the label"
         if self.memory_filter == "archived":
-            return f"{prefix} 5 to return to all entries"
+            return f"{prefix} 7 to return to all entries"
         return f"{prefix} {self._memory_filter_hint()} to switch this view"
 
     def _memory_log_text(self) -> str:
@@ -3068,9 +3068,9 @@ class LoopDashboard(App[None]):
 
     def _memory_filter_hint(self) -> str:
         return {
-            "all": "5",
-            "favorites": "6",
-            "history": "7",
+            "all": "7",
+            "favorites": "f",
+            "history": "h",
             "presets": "m",
             "archived": "0",
         }[self.memory_filter]
@@ -3410,9 +3410,7 @@ class LoopDashboard(App[None]):
         elif button_id == "memory-delete":
             self.action_memory_delete()
         elif button_id and button_id.startswith("log-"):
-            self.log_kind = button_id.removeprefix("log-")  # type: ignore[assignment]
-            self._sync_button_state()
-            self._render_selected()
+            self._activate_non_memory_log(button_id.removeprefix("log-"))  # type: ignore[arg-type]
 
     @on(Input.Changed, "#memory-query")
     def on_memory_query_changed(self, event: Input.Changed) -> None:
@@ -3587,41 +3585,31 @@ class LoopDashboard(App[None]):
         self._clear_delete_confirmation()
         self.refresh_data()
 
-    def action_set_log_stdout(self) -> None:
-        self.log_kind = "stdout"
+    def _activate_non_memory_log(self, log_kind: LogKind) -> None:
+        self.log_kind = log_kind
+        self.memory_archive_armed = False
+        self.memory_delete_armed = False
         self._sync_button_state()
         self._render_summary_bar()
         self._render_selected()
+
+    def action_set_log_stdout(self) -> None:
+        self._activate_non_memory_log("stdout")
 
     def action_set_log_stderr(self) -> None:
-        self.log_kind = "stderr"
-        self._sync_button_state()
-        self._render_summary_bar()
-        self._render_selected()
+        self._activate_non_memory_log("stderr")
 
     def action_set_log_prompt(self) -> None:
-        self.log_kind = "prompt"
-        self._sync_button_state()
-        self._render_summary_bar()
-        self._render_selected()
+        self._activate_non_memory_log("prompt")
 
     def action_set_log_events(self) -> None:
-        self.log_kind = "events"
-        self._sync_button_state()
-        self._render_summary_bar()
-        self._render_selected()
+        self._activate_non_memory_log("events")
 
     def action_set_log_metrics(self) -> None:
-        self.log_kind = "metrics"
-        self._sync_button_state()
-        self._render_summary_bar()
-        self._render_selected()
+        self._activate_non_memory_log("metrics")
 
     def action_set_log_history(self) -> None:
-        self.log_kind = "history"
-        self._sync_button_state()
-        self._render_summary_bar()
-        self._render_selected()
+        self._activate_non_memory_log("history")
 
     def _activate_memory_filter(self, memory_filter: MemoryFilter) -> None:
         self.log_kind = "memory"
@@ -3655,7 +3643,12 @@ class LoopDashboard(App[None]):
             return
         self.memory_index = (self._selected_memory_index() + delta) % len(entries)
 
+    def _memory_shortcuts_available(self) -> bool:
+        return self.log_kind == "memory" and not self._text_input_has_focus()
+
     def action_memory_prev(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         self._move_memory_selection(-1)
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -3677,6 +3670,8 @@ class LoopDashboard(App[None]):
         self.memory_index = 0
 
     def action_memory_label_prev(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         self._move_memory_label(-1)
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -3684,6 +3679,8 @@ class LoopDashboard(App[None]):
         self._render_selected()
 
     def action_memory_label_next(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         self._move_memory_label(1)
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -3691,6 +3688,8 @@ class LoopDashboard(App[None]):
         self._render_selected()
 
     def action_memory_label_clear(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         self.memory_label = None
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -3747,6 +3746,8 @@ class LoopDashboard(App[None]):
         self.query_one("#memory-query", Input).value = ""
 
     def action_memory_next(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         self._move_memory_selection(1)
         self.memory_archive_armed = False
         self.memory_delete_armed = False
@@ -3754,6 +3755,8 @@ class LoopDashboard(App[None]):
         self._render_selected()
 
     def action_memory_replay(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         entry = self._primary_memory_entry()
         if entry is None:
             return
@@ -3764,6 +3767,8 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def action_memory_favorite(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         entry = self._primary_memory_entry()
         if entry is None:
             return
@@ -3779,6 +3784,8 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def action_memory_restore(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         entry = self._primary_memory_entry()
         if entry is None or not entry.archived:
             return
@@ -3789,6 +3796,8 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def action_memory_archive(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         entry = self._primary_memory_entry()
         if entry is None:
             return
@@ -3805,6 +3814,8 @@ class LoopDashboard(App[None]):
         self.refresh_data()
 
     def action_memory_delete(self) -> None:
+        if not self._memory_shortcuts_available():
+            return
         entry = self._primary_memory_entry()
         if entry is None:
             return
