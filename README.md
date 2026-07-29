@@ -63,7 +63,7 @@ uv run ailoop run "Do exactly 3 iterations." --steps 3
 Or install globally:
 
 ```bash
-pipx install https://github.com/dmoliveira/ailoop/releases/download/v0.2.1/ai_loop-0.2.1-py3-none-any.whl
+pipx install https://github.com/dmoliveira/ailoop/releases/download/v0.2.2/ai_loop-0.2.2-py3-none-any.whl
 ailoop --help
 ```
 
