@@ -43,6 +43,13 @@ class LoopService:
         self.emit_output = emit_output
         self.workspace_history = WorkspaceHistoryStore(state_root)
 
+    def _append_postcommit_event(self, loop_id: str, event: dict[str, Any]) -> bool:
+        """Best-effort journal write after state is already authoritative."""
+        try:
+            return self.store.append_event(loop_id, event)
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return False
+
     def _normalize_workspace_root(self, workspace_root: str | None) -> str | None:
         normalized = canonical_workspace_root(workspace_root)
         if normalized is None:
@@ -206,7 +213,10 @@ class LoopService:
                 state.status = "stop_requested"
             elif state.status not in {"completed", "failed"}:
                 state.status = "stopped"
-        self.store.append_event(loop_id, {"at": utc_now(), "event": "control", "control": control})
+        self._append_postcommit_event(
+            loop_id,
+            {"at": utc_now(), "event": "control", "control": control},
+        )
         return state
 
     def _prepare_resume(self, state: LoopState) -> None:
@@ -225,7 +235,10 @@ class LoopService:
         with self.store.acquire_lock(loop_id):
             with self.store.mutate(loop_id) as state:
                 self._prepare_resume(state)
-            self.store.append_event(loop_id, {"at": utc_now(), "event": "resume_requested"})
+            self._append_postcommit_event(
+                loop_id,
+                {"at": utc_now(), "event": "resume_requested"},
+            )
         return state
 
     def queue_follow_up(self, loop_id: str, follow_up: str, *, run_next: bool = False) -> LoopState:
@@ -256,7 +269,7 @@ class LoopService:
                     state.control = "run"
                     state.status = "idle"
                     state.pending_single_iteration = True
-        self.store.append_event(
+        self._append_postcommit_event(
             loop_id,
             {"at": utc_now(), "event": "follow_up_queued", "run_next": run_next},
         )
@@ -269,7 +282,10 @@ class LoopService:
                     raise RuntimeError("Cannot clear a follow-up while an iteration is active")
                 state.queued_follow_up = None
                 state.queued_follow_up_token = None
-        self.store.append_event(loop_id, {"at": utc_now(), "event": "follow_up_cleared"})
+        self._append_postcommit_event(
+            loop_id,
+            {"at": utc_now(), "event": "follow_up_cleared"},
+        )
         return state
 
     def request_single_iteration(self, loop_id: str) -> LoopState:
@@ -288,7 +304,7 @@ class LoopService:
                 state.control = "run"
                 state.status = "idle"
                 state.pending_single_iteration = True
-        self.store.append_event(
+        self._append_postcommit_event(
             loop_id,
             {"at": utc_now(), "event": "single_iteration_requested"},
         )
@@ -371,7 +387,7 @@ class LoopService:
         with self.store.acquire_lock(loop_id):
             with self.store.mutate(loop_id) as state:
                 self._prepare_resume(state)
-            self.store.append_event(loop_id, {"at": utc_now(), "event": "resumed"})
+            self._append_postcommit_event(loop_id, {"at": utc_now(), "event": "resumed"})
             return self._run_loop_locked(loop_id)
 
     def _run_loop_locked(self, loop_id: str) -> LoopState:
@@ -405,14 +421,17 @@ class LoopService:
 
         if not admitted:
             if startup_event is not None:
-                self.store.append_event(loop_id, {"at": utc_now(), "event": startup_event})
+                self._append_postcommit_event(
+                    loop_id,
+                    {"at": utc_now(), "event": startup_event},
+                )
             return state
 
         while True:
             claim, terminal_state, terminal_event = self._claim_or_finish(loop_id)
             if claim is None:
                 if terminal_event is not None:
-                    self.store.append_event(
+                    self._append_postcommit_event(
                         loop_id,
                         {"at": utc_now(), "event": terminal_event},
                     )
@@ -698,7 +717,7 @@ class LoopService:
         events: list[dict[str, Any]],
     ) -> None:
         for event in events:
-            self.store.append_event(state.loop_id, event)
+            self._append_postcommit_event(state.loop_id, event)
         if state.run_config.workspace_history_enabled:
             if claim.consumed_follow_up:
                 self.workspace_history.append_follow_up(

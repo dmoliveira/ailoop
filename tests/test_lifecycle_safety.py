@@ -485,10 +485,10 @@ def test_post_final_event_failure_does_not_rollback_iteration(
         return original_append(loop_id, event)
 
     service.store.append_event = fail_completed_event  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="event sink failed"):
-        service.run_loop(state.loop_id)
+    result = service.run_loop(state.loop_id)
 
     finalized = service.load_loop(state.loop_id)
+    assert result.status == "completed"
     assert finalized.status == "completed"
     assert finalized.completed_iterations == 1
     assert len(finalized.iterations) == 1
@@ -509,18 +509,13 @@ def test_post_final_failure_does_not_strand_continuing_loop_as_running(
         return original_append(loop_id, event)
 
     service.store.append_event = fail_completed_event  # type: ignore[method-assign]
-    with pytest.raises(RuntimeError, match="event sink failed"):
-        service.run_loop(state.loop_id)
+    result = service.run_loop(state.loop_id)
 
     finalized = service.load_loop(state.loop_id)
-    assert finalized.status == "failed"
-    assert finalized.completed_iterations == 1
-    assert len(finalized.iterations) == 1
-
-    service.store.append_event = original_append  # type: ignore[method-assign]
-    resumed = service.resume_loop(state.loop_id)
-    assert resumed.status == "completed"
-    assert resumed.completed_iterations == 2
+    assert result.status == "completed"
+    assert finalized.status == "completed"
+    assert finalized.completed_iterations == 2
+    assert len(finalized.iterations) == 2
 
 
 def test_event_append_flushes_and_fsyncs(monkeypatch, tmp_path: Path) -> None:

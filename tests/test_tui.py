@@ -2975,6 +2975,28 @@ def test_action_next_iteration_requests_single_step_and_resume(tmp_path: Path) -
     }
 
 
+def test_next_iteration_still_launches_after_event_failure(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_loop_config(), loop_id="event-failure-next")
+    state.status = "paused"
+    persist_test_state(service, state)
+    service.store.append_event = lambda *_args, **_kwargs: (  # type: ignore[method-assign]
+        _ for _ in ()
+    ).throw(OSError("event unavailable"))
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+    spawned: list[str] = []
+    app._spawn_resume = spawned.append  # type: ignore[method-assign]
+    app.notify = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+
+    app.action_next_iteration()
+
+    assert service.load_loop(state.loop_id).pending_single_iteration is True
+    assert spawned == [state.loop_id]
+
+
 def test_action_resume_selected_resets_control_to_run(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
