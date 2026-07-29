@@ -292,8 +292,7 @@ def test_completed_iteration_survives_task_file_failure(tmp_path: Path) -> None:
 def test_deleted_task_file_after_runner_still_persists_iteration(tmp_path: Path) -> None:
     task_file = tmp_path / "tasks.md"
     task_file.write_text(
-        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n"
-        "## Done\n- None\n",
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n## Done\n- None\n",
         encoding="utf-8",
     )
     script = f"from pathlib import Path; Path(r'{task_file}').unlink()"
@@ -330,8 +329,7 @@ def test_task_validation_remains_primary_when_post_final_side_effect_fails(
 ) -> None:
     task_file = tmp_path / "tasks.md"
     task_file.write_text(
-        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n"
-        "## Done\n- None\n",
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n## Done\n- None\n",
         encoding="utf-8",
     )
     script = f"from pathlib import Path; Path(r'{task_file}').write_text('# broken\\n')"
@@ -561,6 +559,18 @@ def test_scheduled_loops_are_configuration_only(tmp_path: Path) -> None:
     queued = service.queue_follow_up(state.loop_id, "save for scheduler")
     assert queued.queued_follow_up == "save for scheduler"
     assert queued.pending_single_iteration is False
+
+    converted = service.request_restart(
+        state.loop_id,
+        state.run_config,
+        {"mode": "fixed"},
+        {},
+    )
+    assert converted.dashboard_config["mode"] == "fixed"
+    assert converted.status == "idle"
+    assert converted.control == "run"
+    with pytest.raises(RuntimeError, match="Scheduled"):
+        service.request_restart(state.loop_id, state.run_config, scheduled, {})
 
 
 @pytest.mark.parametrize("error_type", [RuntimeError, OSError, KeyboardInterrupt])

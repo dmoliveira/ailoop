@@ -1,5 +1,5 @@
 import subprocess
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -2955,6 +2955,88 @@ def test_action_run_loop_saves_scheduled_loop_without_spawning(tmp_path: Path) -
     assert "spawned" not in created
 
 
+def test_action_run_loop_converts_saved_schedule_to_fixed_and_spawns(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    scheduled_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=None,
+        pause_seconds=3600,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(scheduled_config, loop_id="schedule-to-fixed")
+    service.update_loop_config(state.loop_id, scheduled_config, {"mode": "scheduled"}, {})
+    fixed_config = replace(scheduled_config, steps=1)
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    app.selected_loop_id = state.loop_id
+    app._config_mode_value = lambda: "fixed"  # type: ignore[method-assign]
+    app._form_supports_run = lambda: True  # type: ignore[method-assign]
+    app._validate_workspace_root = lambda: True  # type: ignore[method-assign]
+    app._build_run_config_from_form = lambda _state=None: fixed_config  # type: ignore[method-assign]
+    app._dashboard_form_values = lambda: {"mode": "fixed"}  # type: ignore[method-assign]
+    app._workspace_form_values = lambda: {}  # type: ignore[method-assign]
+    spawned: list[str] = []
+    app._spawn_resume = lambda loop_id: spawned.append(loop_id)  # type: ignore[method-assign]
+    app.notify = lambda *_args, **_kwargs: None  # type: ignore[method-assign]
+    app.refresh_data = lambda: None  # type: ignore[method-assign]
+
+    app.action_run_loop()
+
+    converted = service.load_loop(state.loop_id)
+    assert converted.dashboard_config["mode"] == "fixed"
+    assert converted.run_config.steps == 1
+    assert spawned == [state.loop_id]
+
+
+def test_scheduled_conversion_reports_spawn_failure_without_throwing(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = LoopRunConfig(
+        prompt="hello",
+        runner="echo",
+        agent="orchestrator",
+        steps=1,
+        pause_seconds=0,
+        continue_on_error=True,
+        retry_count=0,
+        pre_prompt_enabled=False,
+        attach_agent_file=False,
+        pre_prompt="",
+        agent_file=None,
+        runner_command="python3",
+        runner_args=["-c", "print('ok')"],
+    )
+    state = service.create_loop(run_config, loop_id="schedule-spawn-failure")
+    service.update_loop_config(state.loop_id, run_config, {"mode": "scheduled"}, {})
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+    messages: list[str] = []
+    app.notify = lambda message, **_kwargs: messages.append(message)  # type: ignore[method-assign]
+
+    def fail_spawn(_loop_id: str) -> None:
+        raise OSError("spawn unavailable")
+
+    app._spawn_resume = fail_spawn  # type: ignore[method-assign]
+    result = app._request_restart_and_spawn(
+        service.load_loop(state.loop_id),
+        run_config,
+        {"mode": "fixed"},
+        {},
+    )
+
+    assert result is None
+    assert service.load_loop(state.loop_id).dashboard_config["mode"] == "fixed"
+    assert messages == ["configuration saved but worker failed to start: spawn unavailable"]
+
+
 def test_action_save_schedule_warns_when_manual_iteration_is_pending(tmp_path: Path) -> None:
     service = LoopService(tmp_path)
     run_config = LoopRunConfig(
@@ -3778,6 +3860,55 @@ def test_scheduled_tui_disables_manual_execution_and_labels_saved_actions(
     import asyncio
 
     asyncio.run(run_test())
+
+
+def test_scheduled_claimed_help_shows_emergency_stop_and_delete_confirmation(
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(
+        LoopRunConfig(
+            prompt="hello",
+            runner="echo",
+            agent="orchestrator",
+            steps=None,
+            pause_seconds=3600,
+            continue_on_error=True,
+            retry_count=0,
+            pre_prompt_enabled=False,
+            attach_agent_file=False,
+            pre_prompt="",
+            agent_file=None,
+            runner_command="python3",
+            runner_args=["-c", "print('ok')"],
+        ),
+        loop_id="scheduled-claimed-help",
+    )
+    state.dashboard_config = {"mode": "scheduled"}
+    state.status = "running"
+    app = LoopDashboard(Path("~/.config/ailoop/config.yaml").expanduser())
+    app.service = service
+
+    class FakeBar:
+        text = ""
+
+        def update(self, text: str) -> None:
+            self.text = text
+
+    bar = FakeBar()
+    app.query_one = lambda *_args, **_kwargs: bar  # type: ignore[method-assign]
+
+    app._render_help_bar(state)
+    assert "s emergency stop" in bar.text
+    assert "d delete" not in bar.text
+    assert "emergency stop ready" in app._actions_status_text(state)
+
+    state.status = "stopped"
+    app._render_help_bar(state)
+    assert "d delete" in bar.text
+    app.delete_armed = True
+    app._render_help_bar(state)
+    assert "d confirm delete" in bar.text
 
 
 def test_disabled_pause_and_stop_shortcuts_do_not_mutate_idle_loop(tmp_path: Path) -> None:

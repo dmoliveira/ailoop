@@ -21,7 +21,7 @@ from textual.reactive import reactive
 from textual.widgets import Button, Checkbox, DataTable, Header, Input, Select, Static, TextArea
 
 from .memory import MemoryStore
-from .models import LoopState
+from .models import LoopRunConfig, LoopState
 from .paths import read_last_lines
 from .service import LoopService
 from .stats import STATUS_ICONS
@@ -2220,9 +2220,10 @@ class LoopDashboard(App[None]):
         mode, _schedule_type, _schedule_every = self._state_mode_and_schedule(loop_state)
         if mode == "scheduled":
             queued = " · follow-up saved" if getattr(loop_state, "queued_follow_up", None) else ""
+            emergency_stop = " · emergency stop ready" if self._can_stop_control(loop_state) else ""
             return (
                 f"{short_loop_id(loop_state.loop_id)} · saved configuration · "
-                f"scheduler unavailable{queued}"
+                f"scheduler unavailable{queued}{emergency_stop}"
             )
         actions: list[str] = []
         if status in {"paused", "stopped", "failed", "idle"} and mode != "scheduled":
@@ -2722,7 +2723,11 @@ class LoopDashboard(App[None]):
             return
         loop_state = state.status  # type: ignore[attr-defined]
         if (getattr(state, "dashboard_config", {}) or {}).get("mode") == "scheduled":
-            actions = ["d delete", "i edit follow-up", "ctrl+g queue follow-up"]
+            actions = ["i edit follow-up", "ctrl+g queue follow-up"]
+            if self._can_stop_control(state):
+                actions.insert(0, "s emergency stop")
+            if state.status not in RUNNING_STATUSES:  # type: ignore[attr-defined]
+                actions.append("d confirm delete" if self.delete_armed else "d delete")
             if getattr(state, "queued_follow_up", None):
                 actions.append("clear queued follow-up")
             bar.update(
@@ -3828,13 +3833,14 @@ class LoopDashboard(App[None]):
                 )
                 self.refresh_data()
                 return
-            state = self.service.request_restart(
-                state.loop_id,
+            state = self._request_restart_and_spawn(
+                state,
                 run_config,
                 dashboard_config,
                 workspace_config,
             )
-            self._spawn_resume(state.loop_id)
+            if state is None:
+                return
             self.notify(f"run sent: {state.loop_id}")
             self.refresh_data()
             return
@@ -3961,13 +3967,14 @@ class LoopDashboard(App[None]):
         if self._state_mode_and_schedule(state)[0] == "scheduled":
             self.notify("scheduled loops cannot be restarted manually", severity="warning")
             return
-        state = self.service.request_restart(
-            state.loop_id,
+        state = self._request_restart_and_spawn(
+            state,
             self._build_run_config_from_form(state),
             self._dashboard_form_values(),
             self._workspace_form_values(),
         )
-        self._spawn_resume(state.loop_id)
+        if state is None:
+            return
         self.notify(f"restart sent: {state.loop_id}")
         self.refresh_data()
 
@@ -3980,16 +3987,47 @@ class LoopDashboard(App[None]):
         if self._state_mode_and_schedule(state)[0] == "scheduled":
             self.notify("scheduled loops cannot be restarted manually", severity="warning")
             return
-        state = self.service.request_restart(
-            state.loop_id,
+        state = self._request_restart_and_spawn(
+            state,
             self._build_run_config_from_form(state),
             self._dashboard_form_values(),
             self._workspace_form_values(),
             reset=True,
         )
-        self._spawn_resume(state.loop_id)
+        if state is None:
+            return
         self.notify(f"counter reset; restart sent: {state.loop_id}")
         self.refresh_data()
+
+    def _request_restart_and_spawn(
+        self,
+        state: LoopState,
+        run_config: LoopRunConfig,
+        dashboard_config: dict[str, object],
+        workspace_config: dict[str, str],
+        *,
+        reset: bool = False,
+    ) -> LoopState | None:
+        try:
+            restarted = self.service.request_restart(
+                state.loop_id,
+                run_config,
+                dashboard_config,
+                workspace_config,
+                reset=reset,
+            )
+        except RuntimeError as exc:
+            self.notify(str(exc), severity="warning")
+            return None
+        try:
+            self._spawn_resume(restarted.loop_id)
+        except OSError as exc:
+            self.notify(
+                f"configuration saved but worker failed to start: {exc}",
+                severity="error",
+            )
+            return None
+        return restarted
 
     def action_remove_selected(self) -> None:
         if self.selected_loop_id:
