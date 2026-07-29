@@ -1,3 +1,4 @@
+import json
 import os
 import signal
 import subprocess
@@ -240,10 +241,28 @@ def test_completed_iteration_survives_task_file_failure(tmp_path: Path) -> None:
     assert [item.number for item in failed.iterations] == [1]
     assert failed.pending_single_iteration is False
     assert failed.queued_follow_up is None
-    events = (tmp_path / state.loop_id / "events.jsonl").read_text(encoding="utf-8")
-    assert '"event": "iteration_aborted"' not in events
-    assert events.count('"event": "iteration_completed"') == 1
-    assert events.count('"event": "post_finalize_failed"') == 1
+    events = [
+        json.loads(line)
+        for line in (tmp_path / state.loop_id / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    event_names = [event["event"] for event in events]
+    assert "iteration_aborted" not in event_names
+    assert "post_finalize_failed" not in event_names
+    assert event_names.count("iteration_completed") == 1
+    assert event_names.count("task_file_validation_failed") == 1
+    validation_event = next(
+        event for event in events if event["event"] == "task_file_validation_failed"
+    )
+    assert validation_event == {
+        "at": validation_event["at"],
+        "event": "task_file_validation_failed",
+        "iteration": 1,
+        "task_file": str(task_file),
+        "error": "TaskFileError",
+        "message": "Unexpected content outside task sections: # broken",
+    }
     history = service.workspace_history.recent_entries(
         config.workspace_root,
         limit=10,
@@ -251,6 +270,13 @@ def test_completed_iteration_survives_task_file_failure(tmp_path: Path) -> None:
     )
     assert [entry.kind for entry in history] == ["prompt", "follow_up", "result"]
     assert history[-1].iteration == 1
+    first_iteration = failed.iterations[0]
+    artifact_paths = [
+        Path(first_iteration.prompt_file or ""),
+        Path(first_iteration.stdout_log or ""),
+        Path(first_iteration.stderr_log or ""),
+    ]
+    artifact_bytes = {path: path.read_bytes() for path in artifact_paths}
 
     task_file.write_text(valid_tasks, encoding="utf-8")
     resumed = service.resume_loop(state.loop_id)
@@ -260,6 +286,104 @@ def test_completed_iteration_survives_task_file_failure(tmp_path: Path) -> None:
     assert [item.number for item in resumed.iterations] == [1, 2]
     assert resumed.pending_single_iteration is False
     assert resumed.queued_follow_up is None
+    assert {path: path.read_bytes() for path in artifact_paths} == artifact_bytes
+
+
+def test_deleted_task_file_after_runner_still_persists_iteration(tmp_path: Path) -> None:
+    task_file = tmp_path / "tasks.md"
+    task_file.write_text(
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n"
+        "## Done\n- None\n",
+        encoding="utf-8",
+    )
+    script = f"from pathlib import Path; Path(r'{task_file}').unlink()"
+    config = make_config(steps=2, runner_args=["-c", script])
+    config.task_file = str(task_file)
+    config.stop_when_tasks_complete = True
+    service = LoopService(tmp_path)
+    state = service.create_loop(config, loop_id="deleted-task-accounting")
+
+    with pytest.raises(FileNotFoundError, match="tasks.md"):
+        service.run_loop(state.loop_id)
+
+    failed = service.load_loop(state.loop_id)
+    assert failed.status == "failed"
+    assert failed.current_iteration == 1
+    assert failed.completed_iterations == 1
+    assert [iteration.number for iteration in failed.iterations] == [1]
+    events = [
+        json.loads(line)
+        for line in (tmp_path / state.loop_id / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [event["event"] for event in events].count("task_file_validation_failed") == 1
+    validation_event = next(
+        event for event in events if event["event"] == "task_file_validation_failed"
+    )
+    assert validation_event["error"] == "FileNotFoundError"
+    assert validation_event["task_file"] == str(task_file)
+
+
+def test_task_validation_remains_primary_when_post_final_side_effect_fails(
+    tmp_path: Path,
+) -> None:
+    task_file = tmp_path / "tasks.md"
+    task_file.write_text(
+        "# Loop Tasks\n\n## To do\n- None\n\n## Doing\n- [ ] Durable task\n\n"
+        "## Done\n- None\n",
+        encoding="utf-8",
+    )
+    script = f"from pathlib import Path; Path(r'{task_file}').write_text('# broken\\n')"
+    config = make_config(steps=2, runner_args=["-c", script])
+    config.task_file = str(task_file)
+    config.stop_when_tasks_complete = True
+    service = LoopService(tmp_path)
+    state = service.create_loop(config, loop_id="task-validation-primary")
+
+    def fail_history(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        raise RuntimeError("workspace history sink failed")
+
+    service.workspace_history.append_result = fail_history  # type: ignore[method-assign]
+    with pytest.raises(ValueError, match="Unexpected content") as exc_info:
+        service.run_loop(state.loop_id)
+
+    assert any("workspace history sink failed" in note for note in exc_info.value.__notes__)
+    failed = service.load_loop(state.loop_id)
+    assert failed.status == "failed"
+    assert failed.completed_iterations == 1
+    events = [
+        json.loads(line)
+        for line in (tmp_path / state.loop_id / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    event_names = [event["event"] for event in events]
+    assert "task_file_validation_failed" in event_names
+    assert "post_finalize_failed" in event_names
+    assert "iteration_aborted" not in event_names
+
+
+def test_invalid_task_file_before_runner_does_not_claim_iteration(tmp_path: Path) -> None:
+    task_file = tmp_path / "tasks.md"
+    task_file.write_text("# broken\n", encoding="utf-8")
+    runner_marker = tmp_path / "runner-started"
+    script = f"from pathlib import Path; Path(r'{runner_marker}').write_text('started')"
+    config = make_config(steps=1, runner_args=["-c", script])
+    config.task_file = str(task_file)
+    config.stop_when_tasks_complete = True
+    service = LoopService(tmp_path)
+    state = service.create_loop(config, loop_id="invalid-before-runner")
+
+    with pytest.raises(ValueError, match="Unexpected content"):
+        service.run_loop(state.loop_id)
+
+    unchanged = service.load_loop(state.loop_id)
+    assert unchanged.status == "idle"
+    assert unchanged.current_iteration == 0
+    assert unchanged.completed_iterations == 0
+    assert unchanged.iterations == []
+    assert not runner_marker.exists()
 
 
 @pytest.mark.parametrize("control", ["stop", "pause"])

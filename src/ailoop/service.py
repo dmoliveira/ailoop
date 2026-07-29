@@ -389,13 +389,22 @@ class LoopService:
                     self._abort_iteration(claim, lifecycle, exc)
                 raise
 
+            post_finalize_error: BaseException | None = None
             try:
                 self._record_finalized_iteration(claim, iteration, state, events)
-                if deferred_error is not None:
-                    raise deferred_error
             except BaseException as exc:
+                post_finalize_error = exc
                 self._fail_after_finalized_iteration(claim, exc)
-                raise
+
+            if deferred_error is not None:
+                if post_finalize_error is not None:
+                    deferred_error.add_note(
+                        "post-finalization side effect also failed: "
+                        f"{type(post_finalize_error).__name__}: {post_finalize_error}"
+                    )
+                raise deferred_error
+            if post_finalize_error is not None:
+                raise post_finalize_error
             if state.status != "running":
                 return state
             if self._wait_between_iterations(state):
@@ -535,8 +544,8 @@ class LoopService:
         self,
         claim: IterationClaim,
         iteration: IterationRecord,
-    ) -> tuple[LoopState, list[dict[str, Any]], BaseException | None]:
-        deferred_error: BaseException | None = None
+    ) -> tuple[LoopState, list[dict[str, Any]], Exception | None]:
+        deferred_error: Exception | None = None
         events: list[dict[str, Any]] = [
             {
                 "at": utc_now(),
@@ -574,9 +583,19 @@ class LoopService:
             else:
                 try:
                     continue_running = self.should_continue(state)
-                except BaseException as exc:
+                except (OSError, ValueError) as exc:
                     deferred_error = exc
                     state.status = "failed"
+                    events.append(
+                        {
+                            "at": utc_now(),
+                            "event": "task_file_validation_failed",
+                            "iteration": claim.number,
+                            "task_file": state.run_config.task_file,
+                            "error": type(exc).__name__,
+                            "message": str(exc),
+                        }
+                    )
                 else:
                     if claim.single_iteration_requested and continue_running:
                         state.status = "paused"
