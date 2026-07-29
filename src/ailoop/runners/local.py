@@ -99,7 +99,10 @@ class LocalRunner:
         full_env.update(env)
         lifecycle = lifecycle or RunnerLifecycle()
 
-        with stdout_log.open("w") as stdout_handle, stderr_log.open("w") as stderr_handle:
+        with (
+            stdout_log.open("w", encoding="utf-8") as stdout_handle,
+            stderr_log.open("w", encoding="utf-8") as stderr_handle,
+        ):
             try:
                 process = subprocess.Popen(
                     [command, *args],
@@ -176,8 +179,8 @@ class LocalRunner:
                 elif cancelled:
                     stderr_handle.write("runner stopped by loop control\n")
 
-        stdout = read_last_lines(stdout_log, CAPTURE_TAIL_LINES)
-        stderr = read_last_lines(stderr_log, CAPTURE_TAIL_LINES)
+        stdout = read_last_lines(stdout_log, CAPTURE_TAIL_LINES, errors="replace")
+        stderr = read_last_lines(stderr_log, CAPTURE_TAIL_LINES, errors="replace")
         duration = time.monotonic() - start
         return RunnerResult(
             command=[command, *args],

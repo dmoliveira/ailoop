@@ -901,6 +901,39 @@ def test_local_runner_writes_output_to_logs_and_returns_tail(tmp_path: Path) -> 
     assert result.stderr.splitlines()[-1] == "err-119"
 
 
+def test_local_runner_preserves_arbitrary_bytes_and_returns_safe_text(tmp_path: Path) -> None:
+    runner = LocalRunner()
+    stdout_log = tmp_path / "stdout.log"
+    stderr_log = tmp_path / "stderr.log"
+    stdout_bytes = b"valid:\xe2\x82\xac:\xff:end\n"
+    stderr_bytes = b"error:\xfe:end\n"
+
+    result = runner.run(
+        command="python3",
+        args=[
+            "-c",
+            (
+                "import os\n"
+                "os.write(1, b'valid:')\n"
+                "os.write(1, b'\\xe2')\n"
+                "os.write(1, b'\\x82')\n"
+                "os.write(1, b'\\xac')\n"
+                "os.write(1, b':\\xff:end\\n')\n"
+                "os.write(2, b'error:\\xfe:end\\n')\n"
+            ),
+        ],
+        env={},
+        stdout_log=stdout_log,
+        stderr_log=stderr_log,
+    )
+
+    assert result.exit_code == 0
+    assert stdout_log.read_bytes() == stdout_bytes
+    assert stderr_log.read_bytes() == stderr_bytes
+    assert result.stdout == "valid:€:�:end"
+    assert result.stderr == "error:�:end"
+
+
 def test_local_runner_records_oserror_in_stderr_log(tmp_path: Path) -> None:
     runner = LocalRunner()
     stdout_log = tmp_path / "stdout.log"

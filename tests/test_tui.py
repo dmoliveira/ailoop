@@ -64,6 +64,15 @@ def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
     assert tail_text(path, lines=2) == "b\nc"
 
 
+def test_tail_text_can_replace_invalid_runner_bytes(tmp_path: Path) -> None:
+    path = tmp_path / "out.log"
+    path.write_bytes(b"old\xff\nvalid:\xe2\x82\xac:\xfe\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        tail_text(path)
+    assert tail_text(path, lines=1, errors="replace") == "valid:€:�"
+
+
 def test_read_events_reads_last_rows(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text("1\n2\n3\n")

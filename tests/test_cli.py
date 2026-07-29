@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from ailoop.cli import main
+from ailoop.cli import _read_log_content, _read_log_excerpt, main
 from ailoop.memory import MemoryStore
 from ailoop.models import LoopRunConfig, LoopState
 from ailoop.service import LoopService
@@ -1315,7 +1315,7 @@ def test_tail_command_reads_last_lines(capsys, monkeypatch, tmp_path: Path) -> N
             }
         )
     )
-    (loop_dir / "iteration-0001.stdout.log").write_text("a\nb\nc\n")
+    (loop_dir / "iteration-0001.stdout.log").write_bytes(b"a\xff\nb\xfe\nc\n")
 
     monkeypatch.setattr(
         "sys.argv",
@@ -1342,7 +1342,17 @@ def test_tail_command_reads_last_lines(capsys, monkeypatch, tmp_path: Path) -> N
     monkeypatch.setattr("ailoop.service.LoopService.__init__", fake_init)
     main()
 
-    assert capsys.readouterr().out == "b\nc\n"
+    assert capsys.readouterr().out == "b�\nc\n"
+
+
+def test_log_readers_keep_prompt_decoding_strict(tmp_path: Path) -> None:
+    path = tmp_path / "prompt.txt"
+    path.write_bytes(b"prompt\xff\n")
+
+    with pytest.raises(UnicodeDecodeError):
+        _read_log_excerpt(path, 1, kind="prompt")
+    with pytest.raises(UnicodeDecodeError):
+        _read_log_content(path, kind="prompt")
 
 
 def test_check_task_file_state_exit_codes(capsys, monkeypatch, tmp_path: Path) -> None:
@@ -1827,7 +1837,7 @@ runners:
             }
         )
     )
-    (loop_dir / "iteration-0001.stdout.log").write_text("ok\n")
+    (loop_dir / "iteration-0001.stdout.log").write_bytes(b"ok\xff\n")
     (loop_dir / "iteration-0001.stderr.log").write_text("")
     (loop_dir / "iteration-0001.prompt.txt").write_text("prompt\n")
     monkeypatch.setattr(
@@ -1853,7 +1863,7 @@ runners:
     main()
     out = capsys.readouterr().out
     data = json.loads(out)
-    assert data["stdout"]["content"] == "ok\n"
+    assert data["stdout"]["content"] == "ok�\n"
 
 
 def test_logs_json_output_can_tail_printed_content(capsys, monkeypatch, tmp_path: Path) -> None:
