@@ -1,9 +1,12 @@
+import errno
 import fcntl
 import json
 import os
+import socket
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,9 +15,22 @@ from pathlib import Path
 import pytest
 
 from ailoop.models import LoopRunConfig
-from ailoop.paths import lock_file, mutation_lock_file, raw_loop_dir, validate_loop_id
+from ailoop.paths import (
+    events_file,
+    lock_file,
+    mutation_lock_file,
+    raw_loop_dir,
+    retired_file,
+    state_file,
+    validate_loop_id,
+)
 from ailoop.service import LoopService
-from ailoop.state import StateLockIntegrityError, StateStore, _atomic_write
+from ailoop.state import (
+    StateEventIntegrityError,
+    StateLockIntegrityError,
+    StateStore,
+    _atomic_write,
+)
 
 
 def make_config(prompt: str = "hello") -> LoopRunConfig:
@@ -42,6 +58,22 @@ def wait_until(predicate, timeout: float = 5) -> None:  # type: ignore[no-untype
             return
         time.sleep(0.02)
     raise AssertionError("condition was not met before timeout")
+
+
+def bind_unix_socket_entry(path: Path) -> socket.socket:
+    short_directory = Path(tempfile.mkdtemp(prefix="ailoop-socket-", dir="/tmp"))
+    short_path = short_directory / "socket"
+    bound_socket = socket.socket(socket.AF_UNIX)
+    try:
+        bound_socket.bind(str(short_path))
+        short_path.rename(path)
+        short_directory.rmdir()
+    except BaseException:
+        bound_socket.close()
+        short_path.unlink(missing_ok=True)
+        short_directory.rmdir()
+        raise
+    return bound_socket
 
 
 LOCK_OPERATIONS = ("mutation", "execution", "inspection")
@@ -89,6 +121,536 @@ def test_inspection_of_missing_loop_does_not_create_directory(tmp_path: Path) ->
         service.loop_paths("missing-loop")
 
     assert not raw_loop_dir(tmp_path, "missing-loop").exists()
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ["symlink", "dangling-symlink", "hardlink", "directory", "fifo", "socket"],
+)
+def test_event_append_rejects_unsafe_journal_entries(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="unsafe-events")
+    path = events_file(service.state_root, state.loop_id)
+    path.unlink()
+    victim = tmp_path / "event-victim"
+    victim.write_bytes(b"preserve event victim")
+    os.chmod(victim, 0o640)
+    victim_mode = stat.S_IMODE(victim.stat().st_mode)
+    dangling_target = tmp_path / "missing-event-victim"
+    bound_socket: socket.socket | None = None
+
+    if attack == "symlink":
+        path.symlink_to(victim)
+    elif attack == "dangling-symlink":
+        path.symlink_to(dangling_target)
+    elif attack == "hardlink":
+        os.link(victim, path)
+    elif attack == "directory":
+        path.mkdir()
+    elif attack == "fifo":
+        os.mkfifo(path)
+    else:
+        bound_socket = bind_unix_socket_entry(path)
+
+    try:
+        with pytest.raises(StateEventIntegrityError, match="Unsafe event journal"):
+            service.store.append_event(state.loop_id, {"event": "unsafe"})
+    finally:
+        if bound_socket is not None:
+            bound_socket.close()
+
+    assert victim.read_bytes() == b"preserve event victim"
+    assert stat.S_IMODE(victim.stat().st_mode) == victim_mode
+    assert not dangling_target.exists()
+
+
+@pytest.mark.parametrize(
+    "attack",
+    ["symlink", "dangling-symlink", "hardlink", "directory", "fifo", "socket"],
+)
+def test_event_append_rejects_unsafe_state_entries(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="unsafe-event-state")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    path = state_file(service.state_root, state.loop_id)
+    path.unlink()
+    victim = tmp_path / "state-victim"
+    victim.write_bytes(b"preserve state victim")
+    os.chmod(victim, 0o640)
+    victim_mode = stat.S_IMODE(victim.stat().st_mode)
+    dangling_target = tmp_path / "missing-state-victim"
+    bound_socket: socket.socket | None = None
+
+    if attack == "symlink":
+        path.symlink_to(victim)
+    elif attack == "dangling-symlink":
+        path.symlink_to(dangling_target)
+    elif attack == "hardlink":
+        os.link(victim, path)
+    elif attack == "directory":
+        path.mkdir()
+    elif attack == "fifo":
+        os.mkfifo(path)
+    else:
+        bound_socket = bind_unix_socket_entry(path)
+
+    try:
+        with pytest.raises(StateEventIntegrityError, match="Unsafe event journal state"):
+            service.store.append_event(state.loop_id, {"event": "unsafe"})
+    finally:
+        if bound_socket is not None:
+            bound_socket.close()
+
+    assert journal.read_bytes() == original_journal
+    assert victim.read_bytes() == b"preserve state victim"
+    assert stat.S_IMODE(victim.stat().st_mode) == victim_mode
+    assert not dangling_target.exists()
+
+
+@pytest.mark.parametrize("attack", ["symlink", "file", "group-writable"])
+def test_event_append_rejects_unsafe_loop_directories(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="unsafe-event-loop")
+    directory = raw_loop_dir(service.state_root, state.loop_id)
+    original_journal = events_file(service.state_root, state.loop_id).read_bytes()
+    preserved = tmp_path / "preserved-loop"
+
+    if attack == "group-writable":
+        os.chmod(directory, 0o770)
+    else:
+        directory.rename(preserved)
+        if attack == "symlink":
+            directory.symlink_to(preserved, target_is_directory=True)
+        else:
+            directory.write_text("not a directory")
+
+    with pytest.raises(StateEventIntegrityError, match="Unsafe event journal directory"):
+        service.store.append_event(state.loop_id, {"event": "unsafe"})
+
+    if attack == "group-writable":
+        journal = directory / "events.jsonl"
+    else:
+        journal = preserved / "events.jsonl"
+    assert journal.read_bytes() == original_journal
+
+
+@pytest.mark.parametrize(
+    "attack",
+    [
+        "symlink-directory",
+        "file-directory",
+        "group-writable-directory",
+        "symlink-marker",
+        "hardlink-marker",
+        "group-writable-marker",
+    ],
+)
+def test_event_append_rejects_unsafe_retirement_entries(
+    tmp_path: Path,
+    attack: str,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="unsafe-retirement")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    retirement_root = service.state_root / ".retired"
+    external = tmp_path / "external-retired"
+    victim = tmp_path / "retirement-victim"
+    victim.write_text("preserve retirement victim")
+
+    if attack == "symlink-directory":
+        external.mkdir()
+        retirement_root.symlink_to(external, target_is_directory=True)
+    elif attack == "file-directory":
+        retirement_root.write_text("not a directory")
+    else:
+        retirement_root.mkdir()
+        if attack == "group-writable-directory":
+            os.chmod(retirement_root, 0o770)
+        else:
+            marker = retired_file(service.state_root, state.loop_id)
+            if attack == "symlink-marker":
+                marker.symlink_to(victim)
+            elif attack == "hardlink-marker":
+                os.link(victim, marker)
+            else:
+                marker.write_text("{}")
+                os.chmod(marker, 0o660)
+
+    with pytest.raises(StateEventIntegrityError, match="Unsafe event journal retirement"):
+        service.store.append_event(state.loop_id, {"event": "unsafe"})
+
+    assert journal.read_bytes() == original_journal
+    assert victim.read_text() == "preserve retirement victim"
+
+
+def test_event_append_missing_loop_or_state_returns_false_without_creating_journal(
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path / "state")
+
+    assert service.store.append_event("missing-loop", {"event": "late"}) is False
+    assert not raw_loop_dir(service.state_root, "missing-loop").exists()
+
+    state = service.create_loop(make_config(), loop_id="missing-event-state")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    state_file(service.state_root, state.loop_id).unlink()
+
+    assert service.store.append_event(state.loop_id, {"event": "late"}) is False
+    assert journal.read_bytes() == original_journal
+
+
+def test_event_append_validates_loop_id_before_lock_access(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+
+    with pytest.raises(ValueError, match="Loop id"):
+        service.store.append_event("../unsafe", {"event": "invalid"})
+
+    assert not (service.state_root / ".locks").exists()
+
+
+def test_event_append_reports_lock_hazard_before_valid_retirement(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="event-lock-precedence")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    retirement = retired_file(service.state_root, state.loop_id)
+    retirement.parent.mkdir(mode=0o700)
+    retirement.write_text("{}")
+    os.chmod(retirement, 0o600)
+    mutation_lock = mutation_lock_file(service.state_root, state.loop_id)
+    mutation_lock.unlink()
+    victim = tmp_path / "event-lock-victim"
+    victim.write_text("preserve lock victim")
+    mutation_lock.symlink_to(victim)
+
+    with pytest.raises(StateLockIntegrityError, match="Unsafe state lock"):
+        service.store.append_event(state.loop_id, {"event": "late"})
+
+    assert journal.read_bytes() == original_journal
+    assert victim.read_text() == "preserve lock victim"
+
+
+def test_event_append_checks_retirement_before_unsafe_loop_directory(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="event-retirement-precedence")
+    directory = raw_loop_dir(service.state_root, state.loop_id)
+    preserved = tmp_path / "retired-loop-preserved"
+    directory.rename(preserved)
+    directory.write_text("unsafe loop entry")
+    retirement = retired_file(service.state_root, state.loop_id)
+    retirement.parent.mkdir(mode=0o700)
+    retirement.write_text("{}")
+    os.chmod(retirement, 0o600)
+
+    assert service.store.append_event(state.loop_id, {"event": "late"}) is False
+    assert (preserved / "events.jsonl").exists()
+
+
+@pytest.mark.parametrize("mode", [0o600, 0o644])
+def test_event_append_normalizes_supported_journal_modes(tmp_path: Path, mode: int) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id=f"supported-event-mode-{mode:o}")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    event = {"event": "mode-normalized"}
+    payload = (json.dumps(event) + "\n").encode()
+    os.chmod(journal, mode)
+
+    assert service.store.append_event(state.loop_id, event) is True
+    assert journal.read_bytes() == original_journal + payload
+    assert stat.S_IMODE(journal.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("mode", [0o400, 0o440, 0o640, 0o660, 0o666, 0o700])
+def test_event_append_rejects_unsupported_journal_modes(tmp_path: Path, mode: int) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id=f"unsupported-event-mode-{mode:o}")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    os.chmod(journal, mode)
+
+    with pytest.raises(StateEventIntegrityError, match="Unsafe event journal file"):
+        service.store.append_event(state.loop_id, {"event": "unsupported-mode"})
+
+    assert journal.read_bytes() == original_journal
+    assert stat.S_IMODE(journal.stat().st_mode) == mode
+
+
+def test_event_append_rejects_group_writable_state_file(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="unsafe-event-state-mode")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    path = state_file(service.state_root, state.loop_id)
+    os.chmod(path, 0o660)
+
+    with pytest.raises(StateEventIntegrityError, match="Unsafe event journal state"):
+        service.store.append_event(state.loop_id, {"event": "unsafe-state-mode"})
+
+    assert journal.read_bytes() == original_journal
+
+
+def test_event_serialization_fails_before_missing_journal_is_created(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="event-serialization")
+    journal = events_file(service.state_root, state.loop_id)
+    journal.unlink()
+
+    with pytest.raises(TypeError, match="JSON serializable"):
+        service.store.append_event(state.loop_id, {"value": object()})
+
+    assert not journal.exists()
+
+
+def test_event_append_retries_short_writes(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="short-event-write")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    event = {"event": "short-write"}
+    payload = (json.dumps(event) + "\n").encode()
+    original_write = os.write
+    journal_descriptor: int | None = None
+
+    def write_short(descriptor: int, data) -> int:  # type: ignore[no-untyped-def]
+        nonlocal journal_descriptor
+        if journal_descriptor is None and bytes(data) == payload:
+            journal_descriptor = descriptor
+        if descriptor == journal_descriptor and len(data) > 3:
+            return original_write(descriptor, data[:3])
+        return original_write(descriptor, data)
+
+    monkeypatch.setattr("ailoop.state.os.write", write_short)
+
+    assert service.store.append_event(state.loop_id, event) is True
+    assert journal.read_bytes() == original_journal + payload
+
+
+def test_event_append_rejects_zero_length_write(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="zero-event-write")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    event = {"event": "zero-write"}
+    payload = (json.dumps(event) + "\n").encode()
+    original_write = os.write
+
+    def write_zero(descriptor: int, data) -> int:  # type: ignore[no-untyped-def]
+        if bytes(data) == payload:
+            return 0
+        return original_write(descriptor, data)
+
+    monkeypatch.setattr("ailoop.state.os.write", write_zero)
+
+    with pytest.raises(OSError, match="Unable to write state event journal") as raised:
+        service.store.append_event(state.loop_id, event)
+
+    assert raised.value.errno == errno.EIO
+    assert journal.read_bytes() == original_journal
+
+
+def test_event_append_preserves_partial_write_error(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="failed-event-write")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    event = {"event": "partial-error"}
+    payload = (json.dumps(event) + "\n").encode()
+    original_write = os.write
+    journal_descriptor: int | None = None
+    wrote_prefix = False
+
+    def fail_after_prefix(descriptor: int, data) -> int:  # type: ignore[no-untyped-def]
+        nonlocal journal_descriptor, wrote_prefix
+        if journal_descriptor is None and bytes(data) == payload:
+            journal_descriptor = descriptor
+        if descriptor != journal_descriptor:
+            return original_write(descriptor, data)
+        if not wrote_prefix:
+            wrote_prefix = True
+            return original_write(descriptor, data[:5])
+        raise OSError(errno.ENOSPC, "injected event write failure")
+
+    monkeypatch.setattr("ailoop.state.os.write", fail_after_prefix)
+
+    with pytest.raises(OSError, match="injected event write failure") as raised:
+        service.store.append_event(state.loop_id, event)
+
+    assert raised.value.errno == errno.ENOSPC
+    assert journal.read_bytes() == original_journal + payload[:5]
+
+
+def test_event_append_propagates_file_fsync_failure(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="event-file-fsync")
+    journal = events_file(service.state_root, state.loop_id)
+    journal_identity = journal.stat()
+    event = {"event": "file-fsync-failure"}
+    payload = (json.dumps(event) + "\n").encode()
+    original_fsync = os.fsync
+
+    def fail_event_file_fsync(descriptor: int) -> None:
+        observed = os.fstat(descriptor)
+        if (observed.st_dev, observed.st_ino) == (journal_identity.st_dev, journal_identity.st_ino):
+            raise OSError(errno.EIO, "injected event file fsync failure")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr("ailoop.state.os.fsync", fail_event_file_fsync)
+
+    with pytest.raises(OSError, match="injected event file fsync failure"):
+        service.store.append_event(state.loop_id, event)
+
+    assert journal.read_bytes().endswith(payload)
+
+
+def test_event_append_ignores_directory_fsync_failure(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="event-directory-fsync")
+    journal = events_file(service.state_root, state.loop_id)
+    event = {"event": "directory-fsync-failure"}
+    payload = (json.dumps(event) + "\n").encode()
+    original_fsync = os.fsync
+    directory_fsync_failures = 0
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        nonlocal directory_fsync_failures
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            directory_fsync_failures += 1
+            raise OSError(errno.EIO, "injected event directory fsync failure")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr("ailoop.state.os.fsync", fail_directory_fsync)
+
+    assert service.store.append_event(state.loop_id, event) is True
+    assert directory_fsync_failures == 1
+    assert journal.read_bytes().endswith(payload)
+
+
+@pytest.mark.parametrize("exit_case", ["retired", "missing-loop", "missing-state"])
+def test_event_false_result_survives_descriptor_close_failure(
+    monkeypatch,
+    tmp_path: Path,
+    exit_case: str,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    loop_id = f"event-close-{exit_case}"
+    if exit_case != "missing-loop":
+        state = service.create_loop(make_config(), loop_id=loop_id)
+        if exit_case == "retired":
+            retirement = retired_file(service.state_root, state.loop_id)
+            retirement.parent.mkdir(mode=0o700)
+            retirement.write_text("{}")
+            os.chmod(retirement, 0o600)
+        else:
+            state_file(service.state_root, state.loop_id).unlink()
+    root_identity = service.state_root.stat()
+    original_close = os.close
+    leaked_descriptors: set[int] = set()
+
+    def fail_root_close(descriptor: int) -> None:
+        observed = os.fstat(descriptor)
+        if (observed.st_dev, observed.st_ino) == (root_identity.st_dev, root_identity.st_ino):
+            leaked_descriptors.add(descriptor)
+            raise OSError(errno.EIO, "injected event root close failure")
+        original_close(descriptor)
+
+    try:
+        monkeypatch.setattr("ailoop.state.os.close", fail_root_close)
+        assert service.store.append_event(loop_id, {"event": "late"}) is False
+    finally:
+        monkeypatch.undo()
+        for descriptor in leaked_descriptors:
+            try:
+                original_close(descriptor)
+            except OSError:
+                pass
+
+    assert leaked_descriptors
+
+
+def test_event_append_rejects_post_open_journal_replacement(monkeypatch, tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="replace-open-event")
+    journal = events_file(service.state_root, state.loop_id)
+    original_journal = journal.read_bytes()
+    displaced = journal.with_suffix(".displaced")
+    replacement = b"replacement journal\n"
+    original_validate = service.store._validate_open_event_journal
+    replaced = False
+
+    def replace_before_validation(opened) -> None:  # type: ignore[no-untyped-def]
+        nonlocal replaced
+        if not replaced:
+            journal.rename(displaced)
+            journal.write_bytes(replacement)
+            os.chmod(journal, 0o600)
+            replaced = True
+        original_validate(opened)
+
+    monkeypatch.setattr(service.store, "_validate_open_event_journal", replace_before_validation)
+
+    with pytest.raises(StateEventIntegrityError, match="identity changed"):
+        service.store.append_event(state.loop_id, {"event": "unsafe-replacement"})
+
+    assert displaced.read_bytes() == original_journal
+    assert journal.read_bytes() == replacement
+
+
+def test_event_append_tolerates_retirement_directory_disappearing_before_open(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="disappearing-retirement")
+    retirement_root = service.state_root / ".retired"
+    retirement_root.mkdir(mode=0o700)
+    event = {"event": "after-retirement-disappeared"}
+    payload = (json.dumps(event) + "\n").encode()
+    original_stat = os.stat
+    removed = False
+
+    def remove_after_stat(path, *args, **kwargs):  # type: ignore[no-untyped-def]
+        nonlocal removed
+        observed = original_stat(path, *args, **kwargs)
+        if path == ".retired" and kwargs.get("dir_fd") is not None and not removed:
+            retirement_root.rmdir()
+            removed = True
+        return observed
+
+    monkeypatch.setattr("ailoop.state.os.stat", remove_after_stat)
+
+    assert service.store.append_event(state.loop_id, event) is True
+    assert removed is True
+    assert events_file(service.state_root, state.loop_id).read_bytes().endswith(payload)
+
+
+def test_service_keeps_committed_state_when_event_journal_is_unsafe(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    state = service.create_loop(make_config(), loop_id="unsafe-postcommit-event")
+    journal = events_file(service.state_root, state.loop_id)
+    journal.unlink()
+    victim = tmp_path / "postcommit-victim"
+    victim.write_text("preserve postcommit victim")
+    journal.symlink_to(victim)
+
+    paused = service.request_control(state.loop_id, "pause")
+
+    assert paused.status == "paused"
+    assert paused.control == "pause"
+    assert service.load_loop(state.loop_id).to_dict() == paused.to_dict()
+    assert victim.read_text() == "preserve postcommit victim"
 
 
 @pytest.mark.parametrize("operation", LOCK_OPERATIONS)
