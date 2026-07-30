@@ -365,19 +365,20 @@ class LoopService:
         dashboard_config: dict[str, Any],
         workspace_config: dict[str, str],
     ) -> LoopState:
-        with self.store.mutate(loop_id) as state:
-            if state.status in FAIL_CLOSED_STATUSES:
-                raise RuntimeError("Stop or pause the loop before saving config changes")
-            state.run_config = run_config
-            state.dashboard_config = dashboard_config
-            state.workspace_config = workspace_config
-            if self._is_scheduled(state):
-                if state.pending_single_iteration:
-                    raise RuntimeError(
-                        "Cannot save scheduled mode while a manual iteration is pending"
-                    )
-                state.control = "run"
-                state.status = "idle"
+        with self.store.acquire_lock(loop_id):
+            with self.store.mutate(loop_id) as state:
+                if state.status in FAIL_CLOSED_STATUSES:
+                    raise RuntimeError("Stop or pause the loop before saving config changes")
+                state.run_config = run_config
+                state.dashboard_config = dashboard_config
+                state.workspace_config = workspace_config
+                if self._is_scheduled(state):
+                    if state.pending_single_iteration:
+                        raise RuntimeError(
+                            "Cannot save scheduled mode while a manual iteration is pending"
+                        )
+                    state.control = "run"
+                    state.status = "idle"
         return state
 
     def request_restart(

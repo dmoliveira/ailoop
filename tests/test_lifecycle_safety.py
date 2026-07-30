@@ -668,6 +668,64 @@ def test_scheduled_loops_are_configuration_only(tmp_path: Path) -> None:
         service.request_restart(state.loop_id, state.run_config, scheduled, {})
 
 
+def test_config_update_cannot_race_startup_admission(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_config(steps=1), loop_id="config-startup-race")
+    original_claim = service._claim_or_finish
+    original_run = service.runner.run
+    claim_reached = threading.Event()
+    release_claim = threading.Event()
+    runner_calls = 0
+
+    def delayed_claim(loop_id: str):  # type: ignore[no-untyped-def]
+        claim_reached.set()
+        assert release_claim.wait(timeout=5)
+        return original_claim(loop_id)
+
+    def count_run(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal runner_calls
+        runner_calls += 1
+        return original_run(**kwargs)
+
+    service._claim_or_finish = delayed_claim  # type: ignore[method-assign]
+    service.runner.run = count_run  # type: ignore[method-assign]
+    replacement_config = make_config(steps=1)
+    replacement_config.prompt = "replacement prompt"
+    scheduled = {"mode": "scheduled", "schedule_type": "hours", "schedule_every": "1"}
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(service.run_loop, state.loop_id)
+        assert claim_reached.wait(timeout=5)
+        before = service.load_loop(state.loop_id)
+        assert before.status == "idle"
+        assert service.store.is_locked(state.loop_id) is True
+        assert future.done() is False
+        assert runner_calls == 0
+        try:
+            with pytest.raises(
+                RuntimeError,
+                match=f"Loop is already active: {state.loop_id}",
+            ):
+                service.update_loop_config(
+                    state.loop_id,
+                    replacement_config,
+                    scheduled,
+                    {"include": "src/**"},
+                )
+            assert service.load_loop(state.loop_id).to_dict() == before.to_dict()
+        finally:
+            release_claim.set()
+        final = future.result(timeout=5)
+
+    assert final.status == "completed"
+    assert final.completed_iterations == 1
+    assert len(final.iterations) == 1
+    assert runner_calls == 1
+    assert final.run_config.prompt == "hello"
+    assert final.dashboard_config == {}
+    assert service.store.is_locked(state.loop_id) is False
+
+
 @pytest.mark.parametrize("error_type", [RuntimeError, OSError, KeyboardInterrupt])
 def test_local_runner_cleans_group_and_preserves_callback_exception(
     tmp_path: Path,
