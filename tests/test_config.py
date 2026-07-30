@@ -12,6 +12,13 @@ from ailoop.config import (
 )
 from ailoop.memory import MemoryStore, run_config_from_entry
 
+BOOLEAN_CONFIG_FIELDS = (
+    ("prompt", "pre_prompt_enabled"),
+    ("prompt", "attach_agent_file"),
+    ("loop", "continue_on_error"),
+    ("tasks", "stop_when_complete"),
+)
+
 
 def test_deep_merge_overrides_nested_values() -> None:
     merged = deep_merge({"a": {"b": 1, "c": 2}}, {"a": {"c": 3}, "d": 4})
@@ -157,6 +164,49 @@ def test_load_app_config_rejects_bool_and_fractional_numeric_values(tmp_path: Pa
 
     with pytest.raises(ValueError, match="tasks.max_doing must be an integer"):
         load_app_config(float_config)
+
+
+@pytest.mark.parametrize("section,key", BOOLEAN_CONFIG_FIELDS)
+@pytest.mark.parametrize(
+    "invalid_value",
+    ["true", "false", 0, 1, -1, 1.5, None, [], [True], {}, {"value": False}],
+)
+def test_load_app_config_rejects_non_boolean_control_values(
+    tmp_path: Path,
+    section: str,
+    key: str,
+    invalid_value: object,
+) -> None:
+    config_path = tmp_path / f"{section}-{key}.yaml"
+    config_path.write_text(yaml.safe_dump({section: {key: invalid_value}}))
+
+    with pytest.raises(ValueError, match=rf"^{section}\.{key} must be a boolean$"):
+        load_app_config(config_path)
+
+
+@pytest.mark.parametrize("section,key", BOOLEAN_CONFIG_FIELDS)
+@pytest.mark.parametrize("value", [True, False])
+def test_load_app_config_preserves_boolean_control_values(
+    tmp_path: Path,
+    section: str,
+    key: str,
+    value: bool,
+) -> None:
+    config_path = tmp_path / f"{section}-{key}.yaml"
+    config_path.write_text(yaml.safe_dump({section: {key: value}}))
+
+    app_config = load_app_config(config_path)
+
+    assert getattr(getattr(app_config, section), key) is value
+
+
+def test_load_app_config_preserves_boolean_defaults(tmp_path: Path) -> None:
+    app_config = load_app_config(tmp_path / "missing.yaml")
+
+    assert app_config.prompt.pre_prompt_enabled is True
+    assert app_config.prompt.attach_agent_file is True
+    assert app_config.loop.continue_on_error is True
+    assert app_config.tasks.stop_when_complete is False
 
 
 def test_resolve_run_config_preserves_workspace_history_preferences() -> None:

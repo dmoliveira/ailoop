@@ -31,7 +31,13 @@ Core keys:
 - `loop.pause_seconds`
 - `loop.continue_on_error`
 - `loop.retry_count`
+- `tasks.file`
+- `tasks.stop_when_complete`
+- `tasks.max_doing`
 - `runners.<name>.command`
 - `runners.<name>.args`
+
+Boolean settings must use YAML booleans such as `true` and `false`. Quoted strings,
+numbers, and `null` are rejected instead of being coerced.
 
 Example lives in `README.md`.

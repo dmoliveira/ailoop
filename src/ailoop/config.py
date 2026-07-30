@@ -96,6 +96,12 @@ def _validate_positive(value: int, field_name: str) -> int:
     return value
 
 
+def _validate_bool(value: Any, field_name: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
+
+
 def _validate_steps(value: int | None, field_name: str) -> int | None:
     if value is None:
         return None
@@ -176,14 +182,23 @@ def build_app_config(data: dict[str, Any]) -> AppConfig:
             state_dir=str(expand_path(data["paths"]["state_dir"])),
         ),
         prompt=PromptConfig(
-            pre_prompt_enabled=bool(data["prompt"]["pre_prompt_enabled"]),
-            attach_agent_file=bool(data["prompt"]["attach_agent_file"]),
+            pre_prompt_enabled=_validate_bool(
+                data["prompt"]["pre_prompt_enabled"],
+                "prompt.pre_prompt_enabled",
+            ),
+            attach_agent_file=_validate_bool(
+                data["prompt"]["attach_agent_file"],
+                "prompt.attach_agent_file",
+            ),
             pre_prompt=str(data["prompt"]["pre_prompt"]),
         ),
         loop=LoopConfig(
             steps=loop_steps,
             pause_seconds=loop_pause_seconds,
-            continue_on_error=bool(data["loop"]["continue_on_error"]),
+            continue_on_error=_validate_bool(
+                data["loop"]["continue_on_error"],
+                "loop.continue_on_error",
+            ),
             retry_count=loop_retry_count,
             iteration_timeout_seconds=loop_iteration_timeout_seconds,
         ),
@@ -191,7 +206,10 @@ def build_app_config(data: dict[str, Any]) -> AppConfig:
             file=str(expand_path(data.get("tasks", {}).get("file")))
             if data.get("tasks", {}).get("file")
             else None,
-            stop_when_complete=bool(data.get("tasks", {}).get("stop_when_complete", False)),
+            stop_when_complete=_validate_bool(
+                data.get("tasks", {}).get("stop_when_complete", False),
+                "tasks.stop_when_complete",
+            ),
             max_doing=tasks_max_doing,
         ),
         runners=runners,
