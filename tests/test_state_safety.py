@@ -1,5 +1,7 @@
 import fcntl
 import json
+import os
+import stat
 import subprocess
 import sys
 import threading
@@ -10,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from ailoop.models import LoopRunConfig
-from ailoop.paths import lock_file, raw_loop_dir, validate_loop_id
+from ailoop.paths import lock_file, mutation_lock_file, raw_loop_dir, validate_loop_id
 from ailoop.service import LoopService
-from ailoop.state import StateStore, _atomic_write
+from ailoop.state import StateLockIntegrityError, StateStore, _atomic_write
 
 
 def make_config(prompt: str = "hello") -> LoopRunConfig:
@@ -42,6 +44,30 @@ def wait_until(predicate, timeout: float = 5) -> None:  # type: ignore[no-untype
     raise AssertionError("condition was not met before timeout")
 
 
+LOCK_OPERATIONS = ("mutation", "execution", "inspection")
+
+
+def state_lock_path(root: Path, loop_id: str, operation: str) -> Path:
+    if operation == "mutation":
+        return mutation_lock_file(root, loop_id)
+    return lock_file(root, loop_id)
+
+
+def exercise_state_lock(
+    store: StateStore,
+    loop_id: str,
+    operation: str,
+    entered: list[bool] | None = None,
+) -> None:
+    if operation == "inspection":
+        store.is_locked(loop_id)
+        return
+    lock = store.acquire_mutation_lock if operation == "mutation" else store.acquire_lock
+    with lock(loop_id):
+        if entered is not None:
+            entered.append(True)
+
+
 @pytest.mark.parametrize(
     "loop_id",
     ["../escape", "/absolute", ".hidden", "Upper", "workspaces", "a" * 65, "bad.id"],
@@ -63,6 +89,224 @@ def test_inspection_of_missing_loop_does_not_create_directory(tmp_path: Path) ->
         service.loop_paths("missing-loop")
 
     assert not raw_loop_dir(tmp_path, "missing-loop").exists()
+
+
+@pytest.mark.parametrize("operation", LOCK_OPERATIONS)
+@pytest.mark.parametrize(
+    "attack",
+    ["symlink", "dangling-symlink", "hardlink", "directory", "fifo"],
+)
+def test_state_locks_reject_unsafe_final_entries(
+    tmp_path: Path,
+    operation: str,
+    attack: str,
+) -> None:
+    root = tmp_path / "state"
+    store = StateStore(root)
+    loop_id = f"unsafe-{operation}"
+    path = state_lock_path(root, loop_id, operation)
+    path.parent.mkdir(mode=0o700)
+    victim = tmp_path / "victim"
+    victim.write_bytes(b"preserve me")
+    os.chmod(victim, 0o640)
+    victim_mode = stat.S_IMODE(victim.stat().st_mode)
+    dangling_target = tmp_path / "missing-victim"
+
+    if attack == "symlink":
+        path.symlink_to(victim)
+    elif attack == "dangling-symlink":
+        path.symlink_to(dangling_target)
+    elif attack == "hardlink":
+        os.link(victim, path)
+    elif attack == "directory":
+        path.mkdir()
+    else:
+        os.mkfifo(path)
+
+    entered: list[bool] = []
+    with pytest.raises(StateLockIntegrityError, match="Unsafe state lock"):
+        exercise_state_lock(store, loop_id, operation, entered)
+
+    assert entered == []
+    assert victim.read_bytes() == b"preserve me"
+    assert stat.S_IMODE(victim.stat().st_mode) == victim_mode
+    assert not dangling_target.exists()
+
+
+@pytest.mark.parametrize("operation", LOCK_OPERATIONS)
+def test_state_locks_reject_symlinked_lock_directory(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    root = tmp_path / "state"
+    root.mkdir()
+    external = tmp_path / "external-locks"
+    external.mkdir()
+    (root / ".locks").symlink_to(external, target_is_directory=True)
+    store = StateStore(root)
+
+    with pytest.raises(StateLockIntegrityError, match="Unsafe state lock directory"):
+        exercise_state_lock(store, "unsafe-directory", operation)
+
+    assert list(external.iterdir()) == []
+
+
+@pytest.mark.parametrize("unsafe_target", ["state-root", "lock-directory"])
+def test_state_locks_reject_group_writable_namespaces(
+    tmp_path: Path,
+    unsafe_target: str,
+) -> None:
+    root = tmp_path / "state"
+    root.mkdir(mode=0o700)
+    if unsafe_target == "state-root":
+        os.chmod(root, 0o770)
+    else:
+        locks = root / ".locks"
+        locks.mkdir(mode=0o700)
+        os.chmod(locks, 0o770)
+    store = StateStore(root)
+
+    with pytest.raises(StateLockIntegrityError, match="Unsafe state lock directory"):
+        with store.acquire_lock("unsafe-namespace"):
+            pytest.fail("unsafe namespace must not be entered")
+
+
+@pytest.mark.parametrize("operation", LOCK_OPERATIONS)
+def test_state_locks_fail_closed_without_no_follow(
+    monkeypatch,
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    store = StateStore(tmp_path / "state")
+    monkeypatch.setattr("ailoop.state.os.O_NOFOLLOW", 0)
+
+    with pytest.raises(StateLockIntegrityError, match="no-follow"):
+        exercise_state_lock(store, "missing-no-follow", operation)
+
+
+@pytest.mark.parametrize("operation", LOCK_OPERATIONS)
+def test_state_locks_reject_path_replacement_after_flock(
+    monkeypatch,
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    root = tmp_path / "state"
+    store = StateStore(root)
+    loop_id = f"replace-{operation}"
+    path = state_lock_path(root, loop_id, operation)
+    path.parent.mkdir(mode=0o700)
+    path.write_bytes(b"original diagnostic")
+    os.chmod(path, 0o600)
+    displaced = path.with_suffix(".displaced")
+    original_flock = fcntl.flock
+    replaced = False
+
+    def replace_after_flock(descriptor: int, operation_code: int) -> None:
+        nonlocal replaced
+        original_flock(descriptor, operation_code)
+        if not replaced and operation_code & fcntl.LOCK_EX:
+            path.rename(displaced)
+            path.write_bytes(b"replacement diagnostic")
+            replaced = True
+
+    monkeypatch.setattr("ailoop.state.fcntl.flock", replace_after_flock)
+
+    with pytest.raises(StateLockIntegrityError, match="identity changed"):
+        exercise_state_lock(store, loop_id, operation)
+
+    assert displaced.read_bytes() == b"original diagnostic"
+    assert path.read_bytes() == b"replacement diagnostic"
+
+
+@pytest.mark.parametrize("operation", ["execution", "inspection"])
+def test_busy_state_locks_validate_identity_before_reporting_busy(
+    monkeypatch,
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    root = tmp_path / "state"
+    store = StateStore(root)
+    loop_id = f"busy-replace-{operation}"
+    path = lock_file(root, loop_id)
+    path.parent.mkdir(mode=0o700)
+    path.write_bytes(b"held diagnostic")
+    os.chmod(path, 0o600)
+    holder = os.open(path, os.O_RDWR)
+    original_flock = fcntl.flock
+    original_flock(holder, fcntl.LOCK_EX)
+    displaced = path.with_suffix(".displaced")
+    replaced = False
+
+    def replace_when_busy(descriptor: int, operation_code: int) -> None:
+        nonlocal replaced
+        try:
+            original_flock(descriptor, operation_code)
+        except BlockingIOError:
+            if not replaced:
+                path.rename(displaced)
+                path.write_bytes(b"replacement diagnostic")
+                replaced = True
+            raise
+
+    monkeypatch.setattr("ailoop.state.fcntl.flock", replace_when_busy)
+    try:
+        with pytest.raises(StateLockIntegrityError, match="identity changed"):
+            exercise_state_lock(store, loop_id, operation)
+    finally:
+        original_flock(holder, fcntl.LOCK_UN)
+        os.close(holder)
+
+    assert displaced.read_bytes() == b"held diagnostic"
+    assert path.read_bytes() == b"replacement diagnostic"
+
+
+def test_unlocked_inspection_preserves_diagnostics_and_private_modes(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    store = StateStore(root)
+    path = lock_file(root, "diagnostic-lock")
+    path.parent.mkdir(mode=0o755)
+    path.write_bytes(b"stale pid and notes")
+    os.chmod(path, 0o644)
+
+    assert store.is_locked("diagnostic-lock") is False
+
+    assert path.read_bytes() == b"stale pid and notes"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
+def test_execution_lock_completes_partial_pid_writes(monkeypatch, tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state")
+    path = lock_file(store.state_root, "partial-pid")
+    original_write = os.write
+    write_attempts = 0
+
+    def write_one_byte(descriptor: int, payload: bytes | memoryview) -> int:
+        nonlocal write_attempts
+        write_attempts += 1
+        return original_write(descriptor, payload[:1])
+
+    monkeypatch.setattr("ailoop.state.os.write", write_one_byte)
+
+    with store.acquire_lock("partial-pid"):
+        assert path.read_text() == str(os.getpid())
+
+    assert write_attempts == len(str(os.getpid()))
+
+
+def test_zero_length_pid_write_releases_execution_lock(monkeypatch, tmp_path: Path) -> None:
+    store = StateStore(tmp_path / "state")
+    entered = False
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr("ailoop.state.os.write", lambda _descriptor, _payload: 0)
+        with pytest.raises(OSError, match="Unable to write state lock PID"):
+            with store.acquire_lock("zero-pid"):
+                entered = True
+
+    assert entered is False
+    with store.acquire_lock("zero-pid"):
+        pass
 
 
 def test_execution_flock_is_cross_process_and_permanent(tmp_path: Path) -> None:

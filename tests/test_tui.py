@@ -2,6 +2,7 @@ import subprocess
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,7 @@ from textual.widgets import Button, DataTable, Input, Select, Static, TextArea
 from ailoop.memory import MemoryStore
 from ailoop.models import IterationRecord, LoopRunConfig, LoopState
 from ailoop.service import LoopService
+from ailoop.state import StateLockIntegrityError
 from ailoop.tui import (
     PLANNING_ONLY_CONTROL_IDS,
     LoopDashboard,
@@ -56,6 +58,25 @@ def persist_test_state(service: LoopService, state: LoopState) -> None:
         for item in fields(LoopState):
             if item.name != "loop_id":
                 setattr(persisted, item.name, getattr(state, item.name))
+
+
+def test_clear_follow_up_fails_closed_on_unsafe_state_lock() -> None:
+    class UnsafeStore:
+        @staticmethod
+        def is_locked(_loop_id: str) -> bool:
+            raise StateLockIntegrityError("unsafe lock")
+
+    dashboard = SimpleNamespace(
+        service=SimpleNamespace(store=UnsafeStore()),
+        _is_scheduled_fail_closed=lambda _state: False,
+    )
+    state = SimpleNamespace(
+        loop_id="unsafe-lock",
+        queued_follow_up="review this",
+        pending_single_iteration=False,
+    )
+
+    assert LoopDashboard._can_clear_follow_up(dashboard, state) is False
 
 
 def test_tail_text_reads_last_lines(tmp_path: Path) -> None:
