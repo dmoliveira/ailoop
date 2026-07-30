@@ -354,6 +354,65 @@ def test_retry_attempts_keep_distinct_log_evidence(tmp_path: Path) -> None:
     assert service.loop_paths(state.loop_id)["stdout"] == stdout_logs[-1]
 
 
+def test_durable_stop_after_failed_attempt_prevents_retry(tmp_path: Path) -> None:
+    service = LoopService(tmp_path / "state")
+    run_config = make_service_run_config()
+    run_config.steps = 1
+    run_config.retry_count = 1
+    run_config.runner_args = ["-c", "raise SystemExit(7)"]
+    state = service.create_loop(run_config, loop_id="stop-before-retry")
+    original_run = service.runner.run
+    runner_calls = 0
+
+    def run_and_stop(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal runner_calls
+        runner_calls += 1
+        result = original_run(**kwargs)
+        if runner_calls == 1:
+            service.request_control(state.loop_id, "stop")
+        return result
+
+    service.runner.run = run_and_stop  # type: ignore[method-assign]
+
+    final = service.run_loop(state.loop_id)
+
+    logs = raw_loop_dir(service.state_root, state.loop_id) / "logs"
+    stdout_logs = sorted(logs.glob("iteration-0001-*.attempt-*.stdout.log"))
+    stderr_logs = sorted(logs.glob("iteration-0001-*.attempt-*.stderr.log"))
+    assert runner_calls == 1
+    assert len(stdout_logs) == len(stderr_logs) == 1
+    assert ".attempt-0001." in stdout_logs[0].name
+    assert ".attempt-0001." in stderr_logs[0].name
+    assert final.status == "stopped"
+    assert final.control == "stop"
+    assert final.completed_iterations == 1
+    assert final.current_iteration == 1
+    assert final.last_exit_code == 7
+    assert final.consecutive_failures == 1
+    assert len(final.iterations) == 1
+    iteration = final.iterations[0]
+    assert iteration.number == 1
+    assert iteration.exit_code == 7
+    assert iteration.success is False
+    assert iteration.timed_out is False
+    assert iteration.cancelled is False
+    assert Path(iteration.stdout_log or "") == stdout_logs[0]
+    assert Path(iteration.stderr_log or "") == stderr_logs[0]
+    assert service.loop_paths(state.loop_id)["stdout"] == stdout_logs[0]
+    assert service.loop_paths(state.loop_id)["stderr"] == stderr_logs[0]
+    assert service.load_loop(state.loop_id).to_dict() == final.to_dict()
+    events = [
+        json.loads(line)
+        for line in (raw_loop_dir(service.state_root, state.loop_id) / "events.jsonl")
+        .read_text()
+        .splitlines()
+    ]
+    assert [event["exit_code"] for event in events if event["event"] == "iteration_completed"] == [
+        7
+    ]
+    assert sum(event["event"] == "stopped" for event in events) == 1
+
+
 def test_reset_restart_does_not_overwrite_prior_evidence(tmp_path: Path) -> None:
     service = LoopService(tmp_path / "state")
     run_config = make_service_run_config()
@@ -455,6 +514,30 @@ def test_request_control_rejects_invalid_values(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Invalid control: invalid"):
         service.request_control(state.loop_id, "invalid")
+
+
+def test_stop_request_dominates_late_pause(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    state = service.create_loop(make_service_run_config(), loop_id="stop-dominates-pause")
+    with service.store.mutate(state.loop_id) as persisted:
+        persisted.status = "running"
+
+    stopped = service.request_control(state.loop_id, "stop")
+    after_pause = service.request_control(state.loop_id, "pause")
+
+    assert stopped.status == "stop_requested"
+    assert stopped.control == "stop"
+    assert after_pause.status == "stop_requested"
+    assert after_pause.control == "stop"
+    assert service.load_loop(state.loop_id).to_dict() == after_pause.to_dict()
+    control_events = [
+        json.loads(line)
+        for line in (raw_loop_dir(service.state_root, state.loop_id) / "events.jsonl")
+        .read_text()
+        .splitlines()
+        if json.loads(line)["event"] == "control"
+    ]
+    assert [event["control"] for event in control_events] == ["stop", "stop"]
 
 
 def test_request_single_iteration_runs_one_iteration_then_pauses(tmp_path: Path) -> None:
@@ -610,6 +693,22 @@ def test_resume_loop_resets_control_and_runs(tmp_path: Path) -> None:
     final_state = service.resume_loop(state.loop_id)
 
     assert final_state.status == "completed"
+    assert final_state.completed_iterations == 1
+
+
+def test_resume_loop_clears_stop_control_and_runs_remaining_work(tmp_path: Path) -> None:
+    service = LoopService(tmp_path)
+    run_config = make_service_run_config()
+    run_config.steps = 1
+    state = service.create_loop(run_config, loop_id="resume-stopped")
+    stopped = service.request_control(state.loop_id, "stop")
+
+    final_state = service.resume_loop(state.loop_id)
+
+    assert stopped.status == "stopped"
+    assert stopped.control == "stop"
+    assert final_state.status == "completed"
+    assert final_state.control == "run"
     assert final_state.completed_iterations == 1
 
 
