@@ -241,15 +241,18 @@ class LoopService:
         with self.store.mutate(loop_id) as state:
             if state.status == "cleanup_failed":
                 raise RuntimeError(f"Loop process cleanup was not confirmed: {loop_id}")
+            effective_control = (
+                "stop" if state.control == "stop" or state.status == "stop_requested" else control
+            )
             if self._is_scheduled(state) and (
-                control != "stop" or state.status not in CLAIMED_STATUSES
+                effective_control != "stop" or state.status not in CLAIMED_STATUSES
             ):
                 raise RuntimeError(
                     "Scheduled loops are saved configurations and cannot be "
                     f"controlled manually: {loop_id}"
                 )
-            state.control = control
-            if control == "pause":
+            state.control = effective_control
+            if effective_control == "pause":
                 if state.status == "running":
                     state.status = "pause_requested"
                 elif state.status == "idle":
@@ -260,7 +263,7 @@ class LoopService:
                 state.status = "stopped"
         self._append_postcommit_event(
             loop_id,
-            {"at": utc_now(), "event": "control", "control": control},
+            {"at": utc_now(), "event": "control", "control": state.control},
         )
         return state
 
@@ -271,7 +274,7 @@ class LoopService:
             raise RuntimeError(
                 f"Loop is marked active and cannot be resumed safely: {state.loop_id}"
             )
-        if not (self.should_continue(state) or state.pending_single_iteration):
+        if not (self._has_remaining_iterations(state) or state.pending_single_iteration):
             raise RuntimeError(f"Loop has no pending iterations: {state.loop_id}")
         state.control = "run"
         state.status = "idle"
@@ -409,10 +412,8 @@ class LoopService:
                     state.iterations = []
         return state
 
-    def should_continue(self, state: LoopState) -> bool:
+    def _has_remaining_iterations(self, state: LoopState) -> bool:
         target = state.run_config.steps
-        if state.control == "stop":
-            return False
         if state.run_config.stop_when_tasks_complete and state.run_config.task_file:
             task_state = parse_task_file(
                 Path(state.run_config.task_file),
@@ -423,6 +424,9 @@ class LoopService:
         if target is None:
             return True
         return state.completed_iterations < target
+
+    def should_continue(self, state: LoopState) -> bool:
+        return state.control != "stop" and self._has_remaining_iterations(state)
 
     def run_loop(self, loop_id: str) -> LoopState:
         with self.store.acquire_lock(loop_id):
@@ -560,6 +564,15 @@ class LoopService:
                 return False
             time.sleep(min(CONTROL_POLL_SECONDS, remaining))
 
+    def _stop_requested(self, loop_id: str) -> bool:
+        state = self.store.load(loop_id)
+        return state.control == "stop" or state.status == "stop_requested"
+
+    def _admit_retry(self, loop_id: str) -> bool:
+        """Serialize retry admission with durable control mutations."""
+        with self.store.acquire_mutation_lock(loop_id):
+            return not self._stop_requested(loop_id)
+
     def _validate_task_file(self, state: LoopState) -> None:
         if state.run_config.task_file:
             parse_task_file(Path(state.run_config.task_file), state.run_config.max_doing)
@@ -638,10 +651,12 @@ class LoopService:
                     else None
                 ),
                 timeout_seconds=state.run_config.iteration_timeout_seconds,
-                should_stop=lambda: self.store.load(state.loop_id).control == "stop",
+                should_stop=lambda: self._stop_requested(state.loop_id),
                 lifecycle=lifecycle,
             )
             if result.exit_code == 0 or result.timed_out or result.cancelled:
+                break
+            if attempt >= state.run_config.retry_count or not self._admit_retry(state.loop_id):
                 break
             attempt += 1
 
